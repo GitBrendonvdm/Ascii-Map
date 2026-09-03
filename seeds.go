@@ -23,7 +23,7 @@ var BenchmarkStyleNames = [10]string{
 // same maps - changing width/height/teleporters would change the layout
 // even with an identical seed.
 const (
-	BenchWidth       = 21
-	BenchHeight      = 15
+	BenchWidth       = 100
+	BenchHeight      = 100
 	BenchTeleporters = 3
 )

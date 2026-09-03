@@ -28,8 +28,8 @@ type runResult struct {
 func main() {
 	enableANSI()
 
-	width := flag.Int("width", 21, "maze width in cells")
-	height := flag.Int("height", 15, "maze height in cells")
+	width := flag.Int("width", 100, "maze width in cells")
+	height := flag.Int("height", 100, "maze height in cells")
 	seed := flag.Int64("seed", 42, "random seed (same seed -> same maze)")
 	teleporters := flag.Int("teleporters", 2, "number of teleporter pairs")
 	braid := flag.Float64("braid", 0.15, "probability of opening an extra wall to create loops (0-1)")

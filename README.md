@@ -31,8 +31,8 @@ Flags:
 | Flag               | Default   | Meaning                                                              |
 | ------------------ | --------- | --------------------------------------------------------------------- |
 | `-seed`            | 42        | RNG seed - same seed + dimensions + style = identical maze            |
-| `-width`           | 21        | maze width in cells (min 5)                                           |
-| `-height`          | 15        | maze height in cells (min 5)                                          |
+| `-width`           | 100       | maze width in cells (min 5)                                           |
+| `-height`          | 100       | maze height in cells (min 5)                                          |
 | `-teleporters`     | 2         | number of teleporter pairs                                            |
 | `-style`           | "Braided" | maze generation style; `-list-styles` prints every registered one     |
 | `-braid`           | 0.15      | probability of knocking down an extra wall to create a loop (Braided only) |
