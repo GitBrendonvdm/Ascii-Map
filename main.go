@@ -25,11 +25,29 @@ type runResult struct {
 	rendered      string
 }
 
+// mapSizePreset keeps the common run sizes named and repeatable. The
+// xlarge preset deliberately has enough cells to expose scaling problems in
+// a solver or its bookkeeping; use it with -summary-only or a focused style
+// while iterating, since the harness runs every registered solver.
+func mapSizePreset(name string) (width, height int, ok bool) {
+	switch strings.ToLower(name) {
+	case "normal":
+		return 21, 15, true
+	case "large":
+		return 100, 100, true
+	case "xlarge", "x-large":
+		return 250, 250, true
+	default:
+		return 0, 0, false
+	}
+}
+
 func main() {
 	enableANSI()
 
 	width := flag.Int("width", 100, "maze width in cells")
 	height := flag.Int("height", 100, "maze height in cells")
+	size := flag.String("size", "large", "maze-size preset: normal (21x15), large (100x100), or xlarge (250x250)")
 	seed := flag.Int64("seed", 42, "random seed (same seed -> same maze)")
 	teleporters := flag.Int("teleporters", 2, "number of teleporter pairs")
 	braid := flag.Float64("braid", 0.15, "probability of opening an extra wall to create loops (0-1)")
@@ -58,6 +76,29 @@ func main() {
 	if *bench {
 		runBenchmark(*summaryOnly, *consoleWidthFlag, *consoleRoutes, *outPath)
 		return
+	}
+
+	presetWidth, presetHeight, ok := mapSizePreset(*size)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "unknown size preset %q; choose normal, large, or xlarge\n", *size)
+		os.Exit(1)
+	}
+	widthSpecified, heightSpecified := false, false
+	flag.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "width":
+			widthSpecified = true
+		case "height":
+			heightSpecified = true
+		}
+	})
+	// A named size selects both dimensions, but callers can tune either
+	// axis explicitly: -size xlarge -width 400, for example, is 400x250.
+	if !widthSpecified {
+		*width = presetWidth
+	}
+	if !heightSpecified {
+		*height = presetHeight
 	}
 
 	if *width < 5 || *height < 5 {

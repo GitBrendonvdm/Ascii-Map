@@ -14,8 +14,12 @@ go build -o maze.exe .
 ## Generate and solve one maze
 
 ```bash
-./maze.exe -seed 42 -width 21 -height 15 -teleporters 2
+./maze.exe -seed 42 -size normal -teleporters 2
 ```
+
+Size presets: `-size normal` (21x15), `-size large` (100x100, the default),
+and `-size xlarge` (250x250). Explicit `-width` and `-height` flags override
+either dimension of the selected preset.
 
 Every registered algorithm runs against the same maze, each getting its own
 untouched clone. A leaderboard (ranked by score - see Scoring below, smallest
@@ -33,6 +37,7 @@ Flags:
 | `-seed`            | 42        | RNG seed - same seed + dimensions + style = identical maze            |
 | `-width`           | 100       | maze width in cells (min 5)                                           |
 | `-height`          | 100       | maze height in cells (min 5)                                          |
+| `-size`            | "large"   | map-size preset: `normal` (21x15), `large` (100x100), or scary `xlarge` (250x250); explicit width/height override it |
 | `-teleporters`     | 2         | number of teleporter pairs                                            |
 | `-style`           | "Braided" | maze generation style; `-list-styles` prints every registered one     |
 | `-braid`           | 0.15      | probability of knocking down an extra wall to create a loop (Braided only) |
