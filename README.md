@@ -17,7 +17,7 @@ go build -o maze.exe .
 ./maze.exe -seed 42 -size normal -teleporters 2
 ```
 
-Size presets: `-size normal` (21x15), `-size large` (100x100, the default),
+Size presets: `-size normal` (21x15, the default), `-size large` (100x100),
 and `-size xlarge` (250x250). Explicit `-width` and `-height` flags override
 either dimension of the selected preset.
 
@@ -35,9 +35,9 @@ Flags:
 | Flag               | Default   | Meaning                                                              |
 | ------------------ | --------- | --------------------------------------------------------------------- |
 | `-seed`            | 42        | RNG seed - same seed + dimensions + style = identical maze            |
-| `-width`           | 100       | maze width in cells (min 5)                                           |
-| `-height`          | 100       | maze height in cells (min 5)                                          |
-| `-size`            | "large"   | map-size preset: `normal` (21x15), `large` (100x100), or scary `xlarge` (250x250); explicit width/height override it |
+| `-width`           | 21        | maze width in cells (min 5)                                           |
+| `-height`          | 15        | maze height in cells (min 5)                                          |
+| `-size`            | "normal"  | map-size preset: `normal` (21x15), `large` (100x100), or scary `xlarge` (250x250); explicit width/height override it |
 | `-teleporters`     | 2         | number of teleporter pairs                                            |
 | `-style`           | "Braided" | maze generation style; `-list-styles` prints every registered one     |
 | `-braid`           | 0.15      | probability of knocking down an extra wall to create a loop (Braided only) |
