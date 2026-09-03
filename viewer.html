@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Ascii-Maze Results Viewer</title>
 <style>
     :root {
@@ -30,9 +31,11 @@
         background: var(--bg);
         color: var(--text);
         height: 100vh;
+        height: 100dvh;
         display: flex;
         flex-direction: column;
         overflow: hidden;
+        -webkit-tap-highlight-color: transparent;
     }
     .mono { font-family: Consolas, "Cascadia Mono", monospace; }
     header {
@@ -208,11 +211,78 @@
     .doc-card-body code { font-family: Consolas, monospace; background: var(--panel-alt); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
     .doc-card-close { background: transparent; border: none; color: var(--text-dim); font-size: 20px; cursor: pointer; line-height: 1; padding: 2px 6px; }
     .doc-card-close:hover { color: var(--text); }
+
+    .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+    .menu-btn {
+        display: none;
+        background: var(--panel-alt);
+        border: 1px solid var(--border);
+        color: var(--text);
+        border-radius: 6px;
+        font-size: 16px;
+        line-height: 1;
+        padding: 8px 10px;
+        cursor: pointer;
+        flex-shrink: 0;
+    }
+    .menu-btn:hover { border-color: var(--accent); }
+
+    .sidebar-backdrop {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.5);
+        z-index: 55;
+    }
+
+    /* Below this width the two-pane desktop layout (a 300px-wide aside
+       permanently beside main) leaves main - the actual maze animations,
+       the entire point of this page - with almost no room at all. The
+       aside becomes an off-canvas drawer instead, so main gets the full
+       screen the instant data loads, exactly like the narrow fixed-width
+       strip it already is on desktop. */
+    @media (max-width: 820px) {
+        .menu-btn { display: inline-flex; align-items: center; justify-content: center; touch-action: manipulation; }
+        .sidebar-backdrop.show { display: block; }
+
+        header { flex-wrap: wrap; row-gap: 6px; padding: 10px 12px; }
+        header h1 { font-size: 13px; max-width: 46vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        header .status { flex-basis: 100%; order: 3; white-space: normal; font-size: 11px; }
+
+        aside {
+            position: fixed;
+            top: 0;
+            bottom: 0;
+            left: 0;
+            width: min(86vw, 340px);
+            z-index: 60;
+            transform: translateX(-100%);
+            transition: transform 0.25s ease;
+            box-shadow: 4px 0 24px rgba(0, 0, 0, 0.5);
+        }
+        aside.open { transform: translateX(0); }
+
+        .controls { gap: 10px; padding: 10px 12px; }
+        .controls input[type=range] { width: 100px; }
+
+        button, .filebtn, select { padding: 9px 14px; font-size: 13px; min-height: 40px; touch-action: manipulation; }
+        .tabs button { min-height: 44px; }
+        .chip { padding: 8px 12px; font-size: 12px; min-height: 32px; display: inline-flex; align-items: center; touch-action: manipulation; }
+        .maze-item { padding: 12px 10px; font-size: 13px; }
+        .info-btn { width: 26px; height: 26px; font-size: 14px; }
+
+        .panels { grid-template-columns: 1fr; padding: 10px; gap: 10px; }
+        .empty .drop { padding: 24px 20px; }
+        .doc-overlay { padding: 10px; }
+        .doc-card-body { font-size: 14px; }
+    }
 </style>
 </head>
 <body>
 
 <header>
+    <button class="menu-btn" id="menuBtn" aria-label="Open menu" title="Mazes / leaderboard / algorithms">&#9776;</button>
     <h1>Ascii-Maze &mdash; Results Viewer</h1>
     <div class="status mono" id="status">No data loaded.</div>
     <label class="filebtn" for="fileInput">Open JSON&hellip;</label>
@@ -238,6 +308,7 @@
         <div class="tabpane" id="tabBoard" style="display:none"></div>
         <div class="tabpane" id="tabDocs" style="display:none"></div>
     </aside>
+    <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
 
     <main id="mainArea" style="display:none">
         <div class="controls">
@@ -377,6 +448,24 @@
     document.getElementById('docCardClose').addEventListener('click', closeDoc);
     docOverlay.addEventListener('click', function (e) { if (e.target === docOverlay) closeDoc(); });
     document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeDoc(); });
+
+    // ---------- mobile sidebar drawer ----------
+    // Below the 820px breakpoint (see CSS) `aside` becomes a slide-in
+    // drawer instead of a permanent 300px-wide column, so `main` - the
+    // actual maze animations - gets the full screen by default. Toggling
+    // is pure CSS (a `.open` class flips `transform`); this just owns
+    // when that class is on. Inert above the breakpoint: menuBtn is
+    // display:none there, so nothing ever calls openSidebar to begin with.
+    var sidebarEl = document.getElementById('sidebar');
+    var sidebarBackdrop = document.getElementById('sidebarBackdrop');
+    var menuBtn = document.getElementById('menuBtn');
+    function openSidebar() { sidebarEl.classList.add('open'); sidebarBackdrop.classList.add('show'); }
+    function closeSidebar() { sidebarEl.classList.remove('open'); sidebarBackdrop.classList.remove('show'); }
+    menuBtn.addEventListener('click', function () {
+        if (sidebarEl.classList.contains('open')) closeSidebar(); else openSidebar();
+    });
+    sidebarBackdrop.addEventListener('click', closeSidebar);
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeSidebar(); });
 
     function renderDocsList() {
         var el = document.getElementById('tabDocs');
@@ -534,7 +623,7 @@
             return boardSort.asc ? av - bv : bv - av;
         });
 
-        var html = '<table><thead><tr>';
+        var html = '<div class="table-scroll"><table><thead><tr>';
         cols.forEach(function (c) { html += '<th data-key="' + c.key + '">' + c.label + '</th>'; });
         html += '</tr></thead><tbody>';
         rows.forEach(function (r) {
@@ -546,7 +635,7 @@
             });
             html += '</tr>';
         });
-        html += '</tbody></table>';
+        html += '</tbody></table></div>';
         html += '<p class="note">Score = geometric mean of Steps/Span/PrimOps/Allocs/Mem, each ratioed against the best algorithm in that dimension on that maze. All five are deterministic - the same maze solved by the same algorithm produces the exact same numbers on any machine, every run - which is why wall-clock time and CPU time aren\'t shown here at all: they depend on how busy the machine running the benchmark happens to be. Span is critical-path length (the longest chain of discoveries that had to happen strictly in sequence) rather than total work, so a solver that genuinely splits work across threads is credited for it instead of penalized for "doing more total operations." PrimOps is a deterministic stand-in for raw CPU cost - every direction checked, plus a real charge for actual synchronization (lost compare-and-swaps, mutex round trips, heap maintenance) - that Steps/Span/Allocs/Mem all leave uncharged, since none of them cost anything for work that doesn\'t allocate or doesn\'t change what gets discovered. ¹Ops (total discoveries made, informational) is shown for context but isn\'t part of Score - Span already covers what a plain discovery count would double-count for a concurrent solver.</p>';
         el.innerHTML = html;
         el.querySelectorAll('th').forEach(function (th) {
@@ -588,6 +677,7 @@
         renderChips();
         renderLeaderboard();
         refreshPanelsPreservingPlayback();
+        closeSidebar(); // picking a maze in the drawer means the user wants to look at its panels, not the drawer
     }
 
     // refreshPanelsPreservingPlayback rebuilds the panel set (new maze,
