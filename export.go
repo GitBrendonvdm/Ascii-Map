@@ -26,7 +26,13 @@ import (
 // in solver.go. Lets a viewer reveal a whole generation's worth of edges
 // at once for a solver that reports real values, instead of always one
 // edge at a time in array order.
-const exportFormatVersion = 4
+//
+// v5: primOpsCount/primOpsRatio join the score (steps/span/primOps/allocs/
+// mem, a 5-way geometric mean now) - a deterministic proxy for raw CPU
+// cost (looping, branching, synchronization) that steps/span/allocs/mem
+// all leave uncharged - see Solution.PrimOps in solver.go and scoredResult
+// in scoring.go for why.
+const exportFormatVersion = 5
 
 type jsonCell struct {
 	X int `json:"x"`
@@ -59,15 +65,17 @@ type jsonResult struct {
 	Path          []jsonCell `json:"path"`
 	Visited       []jsonCell `json:"visited"`
 	Edges         []jsonEdge `json:"edges"`
-	OpsCount      int        `json:"opsCount"`    // len(Edges); total work done, informational only - see scoring.go for why span, not this, feeds the score
-	SpanCount     int        `json:"spanCount"`   // critical-path length; deterministic score input
-	AllocsCount   int64      `json:"allocsCount"` // heap allocation count; deterministic score input
-	MemBytes      int64      `json:"memBytes"`    // bytes allocated; deterministic score input
-	ElapsedNs     int64      `json:"elapsedNs"`   // informational only - see scoring.go
-	CPUNs         int64      `json:"cpuNs"`       // informational only - see scoring.go
+	OpsCount      int        `json:"opsCount"`     // len(Edges); total work done, informational only - see scoring.go for why span, not this, feeds the score
+	SpanCount     int        `json:"spanCount"`    // critical-path length; deterministic score input
+	PrimOpsCount  int64      `json:"primOpsCount"` // deterministic CPU-cost proxy; deterministic score input - see Solution.PrimOps
+	AllocsCount   int64      `json:"allocsCount"`  // heap allocation count; deterministic score input
+	MemBytes      int64      `json:"memBytes"`     // bytes allocated; deterministic score input
+	ElapsedNs     int64      `json:"elapsedNs"`    // informational only - see scoring.go
+	CPUNs         int64      `json:"cpuNs"`        // informational only - see scoring.go
 	Score         float64    `json:"score,omitempty"`
 	StepsRatio    float64    `json:"stepsRatio,omitempty"`
 	SpanRatio     float64    `json:"spanRatio,omitempty"`
+	PrimOpsRatio  float64    `json:"primOpsRatio,omitempty"`
 	AllocsRatio   float64    `json:"allocsRatio,omitempty"`
 	MemRatio      float64    `json:"memRatio,omitempty"`
 }
@@ -95,6 +103,7 @@ type jsonAggregate struct {
 	AvgSteps     float64 `json:"avgSteps"`
 	AvgOps       float64 `json:"avgOps"` // total work; informational only - see scoring.go
 	AvgSpan      float64 `json:"avgSpan"`
+	AvgPrimOps   float64 `json:"avgPrimOps"` // deterministic CPU-cost proxy - see Solution.PrimOps
 	AvgAllocs    float64 `json:"avgAllocs"`
 	AvgMemBytes  float64 `json:"avgMemBytes"`
 	AvgElapsedNs int64   `json:"avgElapsedNs"` // informational only - see scoring.go
@@ -171,6 +180,7 @@ func buildJSONMaze(seed int64, style string, m *Maze, results []runResult, score
 			Steps:         r.steps,
 			OpsCount:      r.ops,
 			SpanCount:     r.span,
+			PrimOpsCount:  r.primOps,
 			AllocsCount:   r.allocs,
 			MemBytes:      r.memBytes,
 			ElapsedNs:     r.elapsed.Nanoseconds(),
@@ -180,6 +190,7 @@ func buildJSONMaze(seed int64, style string, m *Maze, results []runResult, score
 			jr.Score = s.score
 			jr.StepsRatio = s.stepsRatio
 			jr.SpanRatio = s.spanRatio
+			jr.PrimOpsRatio = s.primOpsRatio
 			jr.AllocsRatio = s.allocsRatio
 			jr.MemRatio = s.memRatio
 		}
@@ -235,6 +246,7 @@ func buildJSONAggregate(agg []aggregate) []jsonAggregate {
 			AvgSteps:     a.avgSteps,
 			AvgOps:       a.avgOps,
 			AvgSpan:      a.avgSpan,
+			AvgPrimOps:   a.avgPrimOps,
 			AvgAllocs:    a.avgAllocs,
 			AvgMemBytes:  a.avgMem,
 			AvgElapsedNs: a.avgTime.Nanoseconds(),

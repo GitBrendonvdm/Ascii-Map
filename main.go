@@ -18,6 +18,7 @@ type runResult struct {
 	allocs   int64 // heap allocation count (runtime.MemStats.Mallocs delta) - deterministic, feeds the score
 	ops      int   // search effort: len(Solution.Edges) - deterministic, informational (see scoring.go for why this doesn't feed the score - span does)
 	span     int   // critical-path length: Solution.Span, or ops itself for a solver that leaves Span unset - deterministic, feeds the score
+	primOps  int64 // deterministic CPU-cost proxy: Solution.PrimOps - feeds the score, see that field's doc comment
 	steps    int   // moves taken (path cell count - 1)
 
 	valid         bool
@@ -242,6 +243,7 @@ func runAllSolvers(m *Maze) []runResult {
 			allocs:   allocs,
 			ops:      ops,
 			span:     span,
+			primOps:  sol.PrimOps,
 			steps:    len(sol.Path) - 1,
 		}
 		if err := ValidatePath(m, sol.Path); err != nil {
@@ -300,7 +302,7 @@ func printPanelsOrSummary(results []runResult, summaryOnly bool, consoleWidth in
 func printLeaderboard(title string, results []runResult) {
 	scored := scoreResults(results)
 
-	fmt.Printf("--- %s (score = geometric mean of steps/span/allocs/mem ratios vs. the best on this maze; 1.0 = best in everything, smallest first; ops/time/cpu below are informational only - see scoring.go) ---\n", title)
+	fmt.Printf("--- %s (score = geometric mean of steps/span/primOps/allocs/mem ratios vs. the best on this maze; 1.0 = best in everything, smallest first; ops/time/cpu below are informational only - see scoring.go) ---\n", title)
 
 	if len(scored) > 0 {
 		minSteps := scored[0].steps
@@ -327,8 +329,8 @@ func printLeaderboard(title string, results []runResult) {
 	}
 
 	for i, r := range scored {
-		fmt.Printf("%2d. %-20s score %6.2f   %6d steps   %6d span   %6d allocs   mem %10s   (ops %d, time %s, cpu %s)\n",
-			i+1, r.name, r.score, r.steps, r.span, r.allocs, formatBytes(r.memBytes), r.ops, r.elapsed, r.cpuTime)
+		fmt.Printf("%2d. %-20s score %6.2f   %6d steps   %6d span   %8d primOps   %6d allocs   mem %10s   (ops %d, time %s, cpu %s)\n",
+			i+1, r.name, r.score, r.steps, r.span, r.primOps, r.allocs, formatBytes(r.memBytes), r.ops, r.elapsed, r.cpuTime)
 	}
 	disqualified := len(results) - len(scored)
 	if disqualified > 0 {
@@ -345,16 +347,17 @@ type seedRun struct {
 }
 
 type aggregate struct {
-	name      string
-	avgScore  float64
-	avgSteps  float64
-	avgOps    float64 // total work; informational only - see scoring.go
-	avgSpan   float64
-	avgAllocs float64
-	avgMem    float64
-	avgTime   time.Duration // informational only - see scoring.go
-	avgCPU    time.Duration // informational only - see scoring.go
-	wins      int
+	name       string
+	avgScore   float64
+	avgSteps   float64
+	avgOps     float64 // total work; informational only - see scoring.go
+	avgSpan    float64
+	avgPrimOps float64 // deterministic CPU-cost proxy - feeds the score, see Solution.PrimOps
+	avgAllocs  float64
+	avgMem     float64
+	avgTime    time.Duration // informational only - see scoring.go
+	avgCPU     time.Duration // informational only - see scoring.go
+	wins       int
 }
 
 // runBenchmark regenerates the same 10 fixed mazes every time (so results
@@ -385,10 +388,10 @@ func runBenchmark(summaryOnly bool, consoleWidthOverride int, consoleRoutes bool
 
 	agg := aggregateScores(runsBySeed)
 
-	fmt.Println("=== All algorithms - average score across all 10 seeds (score = geometric mean of steps/span/allocs/mem ratios vs. the best on each maze; smallest first; ops/time/cpu below are informational only - see scoring.go) ===")
+	fmt.Println("=== All algorithms - average score across all 10 seeds (score = geometric mean of steps/span/primOps/allocs/mem ratios vs. the best on each maze; smallest first; ops/time/cpu below are informational only - see scoring.go) ===")
 	for i, a := range agg {
-		fmt.Printf("%2d. %-20s avg score %6.2f   avg %6.1f steps   avg %7.1f span   avg %7.1f allocs   avg mem %10s   won %d/%d   (avg ops %.1f, avg time %s, avg cpu %s)\n",
-			i+1, a.name, a.avgScore, a.avgSteps, a.avgSpan, a.avgAllocs, formatBytes(int64(a.avgMem)), a.wins, len(BenchmarkSeeds), a.avgOps, a.avgTime, a.avgCPU)
+		fmt.Printf("%2d. %-20s avg score %6.2f   avg %6.1f steps   avg %7.1f span   avg %9.1f primOps   avg %7.1f allocs   avg mem %10s   won %d/%d   (avg ops %.1f, avg time %s, avg cpu %s)\n",
+			i+1, a.name, a.avgScore, a.avgSteps, a.avgSpan, a.avgPrimOps, a.avgAllocs, formatBytes(int64(a.avgMem)), a.wins, len(BenchmarkSeeds), a.avgOps, a.avgTime, a.avgCPU)
 	}
 	fmt.Println()
 
@@ -454,6 +457,7 @@ func aggregateScores(runsBySeed []seedRun) []aggregate {
 	totalSteps := map[string]int{}
 	totalOps := map[string]int{}
 	totalSpan := map[string]int{}
+	totalPrimOps := map[string]int64{}
 	totalAllocs := map[string]int64{}
 	totalMem := map[string]int64{}
 	totalTime := map[string]time.Duration{}
@@ -468,6 +472,7 @@ func aggregateScores(runsBySeed []seedRun) []aggregate {
 			totalSteps[r.name] += r.steps
 			totalOps[r.name] += r.ops
 			totalSpan[r.name] += r.span
+			totalPrimOps[r.name] += r.primOps
 			totalAllocs[r.name] += r.allocs
 			totalMem[r.name] += r.memBytes
 			totalTime[r.name] += r.elapsed
@@ -485,16 +490,17 @@ func aggregateScores(runsBySeed []seedRun) []aggregate {
 			continue
 		}
 		agg = append(agg, aggregate{
-			name:      name,
-			avgScore:  totalScore[name] / float64(n),
-			avgSteps:  float64(totalSteps[name]) / float64(n),
-			avgOps:    float64(totalOps[name]) / float64(n),
-			avgSpan:   float64(totalSpan[name]) / float64(n),
-			avgAllocs: float64(totalAllocs[name]) / float64(n),
-			avgMem:    float64(totalMem[name]) / float64(n),
-			avgTime:   totalTime[name] / time.Duration(n),
-			avgCPU:    totalCPU[name] / time.Duration(n),
-			wins:      wins[name],
+			name:       name,
+			avgScore:   totalScore[name] / float64(n),
+			avgSteps:   float64(totalSteps[name]) / float64(n),
+			avgOps:     float64(totalOps[name]) / float64(n),
+			avgSpan:    float64(totalSpan[name]) / float64(n),
+			avgPrimOps: float64(totalPrimOps[name]) / float64(n),
+			avgAllocs:  float64(totalAllocs[name]) / float64(n),
+			avgMem:     float64(totalMem[name]) / float64(n),
+			avgTime:    totalTime[name] / time.Duration(n),
+			avgCPU:     totalCPU[name] / time.Duration(n),
+			wins:       wins[name],
 		})
 	}
 	sort.Slice(agg, func(i, j int) bool { return agg[i].avgScore < agg[j].avgScore })

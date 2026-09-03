@@ -253,7 +253,7 @@
             <div class="group">
                 Mode
                 <select id="modeSelect">
-                    <option value="proportional">Proportional speed (by span)</option>
+                    <option value="proportional">Proportional speed</option>
                     <option value="sync">Sync finish (compare routes)</option>
                 </select>
             </div>
@@ -457,8 +457,8 @@
             status.textContent = filename + ': no mazes found in file.';
             return;
         }
-        if (parsed.formatVersion !== 4) {
-            status.textContent = filename + ': unrecognized formatVersion ' + parsed.formatVersion + ' (viewer expects 4) - reload after rebuilding maze.exe.';
+        if (parsed.formatVersion !== 5) {
+            status.textContent = filename + ': unrecognized formatVersion ' + parsed.formatVersion + ' (viewer expects 5) - reload after rebuilding maze.exe.';
         }
         data = parsed;
         mazes = parsed.mazes;
@@ -508,6 +508,7 @@
                 { key: 'avgScore', label: 'Score', fmt: function (v) { return v.toFixed(2); } },
                 { key: 'avgSteps', label: 'Steps', fmt: function (v) { return v.toFixed(1); } },
                 { key: 'avgSpan', label: 'Span', fmt: function (v) { return v.toFixed(1); } },
+                { key: 'avgPrimOps', label: 'PrimOps', fmt: function (v) { return v.toFixed(0); } },
                 { key: 'avgAllocs', label: 'Allocs', fmt: function (v) { return v.toFixed(1); } },
                 { key: 'avgMemBytes', label: 'Mem', fmt: formatBytes },
                 { key: 'avgOps', label: 'Ops¹', fmt: function (v) { return v.toFixed(1); } },
@@ -520,6 +521,7 @@
                 { key: 'score', label: 'Score', fmt: function (v) { return v ? v.toFixed(2) : '-'; } },
                 { key: 'steps', label: 'Steps' },
                 { key: 'spanCount', label: 'Span' },
+                { key: 'primOpsCount', label: 'PrimOps' },
                 { key: 'allocsCount', label: 'Allocs' },
                 { key: 'memBytes', label: 'Mem', fmt: formatBytes },
                 { key: 'opsCount', label: 'Ops¹' }
@@ -545,7 +547,7 @@
             html += '</tr>';
         });
         html += '</tbody></table>';
-        html += '<p class="note">Score = geometric mean of Steps/Span/Allocs/Mem, each ratioed against the best algorithm in that dimension on that maze. All four are deterministic - the same maze solved by the same algorithm produces the exact same numbers on any machine, every run - which is why wall-clock time and CPU time aren\'t shown here at all: they depend on how busy the machine running the benchmark happens to be. Span is critical-path length (the longest chain of discoveries that had to happen strictly in sequence) rather than total work, so a solver that genuinely splits work across threads is credited for it instead of penalized for "doing more total operations." ¹Ops (total discoveries made, informational) is shown for context but isn\'t part of Score - Span already covers what a plain discovery count would double-count for a concurrent solver.</p>';
+        html += '<p class="note">Score = geometric mean of Steps/Span/PrimOps/Allocs/Mem, each ratioed against the best algorithm in that dimension on that maze. All five are deterministic - the same maze solved by the same algorithm produces the exact same numbers on any machine, every run - which is why wall-clock time and CPU time aren\'t shown here at all: they depend on how busy the machine running the benchmark happens to be. Span is critical-path length (the longest chain of discoveries that had to happen strictly in sequence) rather than total work, so a solver that genuinely splits work across threads is credited for it instead of penalized for "doing more total operations." PrimOps is a deterministic stand-in for raw CPU cost - every direction checked, plus a real charge for actual synchronization (lost compare-and-swaps, mutex round trips, heap maintenance) - that Steps/Span/Allocs/Mem all leave uncharged, since none of them cost anything for work that doesn\'t allocate or doesn\'t change what gets discovered. ¹Ops (total discoveries made, informational) is shown for context but isn\'t part of Score - Span already covers what a plain discovery count would double-count for a concurrent solver.</p>';
         el.innerHTML = html;
         el.querySelectorAll('th').forEach(function (th) {
             th.addEventListener('click', function () {
@@ -672,7 +674,7 @@
 
             var note = document.createElement('div');
             note.className = 'note';
-            note.textContent = 'Score is computed from steps/span/allocs/mem - deterministic, same every run on any machine. Span is critical-path length, not total work, so a solver that genuinely splits work across threads gets credit for it. Wall-clock and CPU time aren\'t shown at all, since they depend on how busy this machine happens to be right now.';
+            note.textContent = 'Score is computed from steps/span/primOps/allocs/mem - deterministic, same every run on any machine. Span is critical-path length, not total work, so a solver that genuinely splits work across threads gets credit for it. PrimOps is a deterministic stand-in for raw CPU cost (looping, branching, synchronization) that the other four dimensions leave uncharged - e.g. a losing compare-and-swap in a concurrent solver costs real CPU time but allocates nothing. Wall-clock and CPU time aren\'t shown at all, since they depend on how busy this machine happens to be right now.';
             wrap.appendChild(note);
 
             container.appendChild(wrap);
@@ -918,6 +920,7 @@
         var html = '';
         html += '<div class="label">Steps</div><div class="live">' + liveSteps + ' / ' + r.steps + '</div>';
         html += '<div class="label">Span</div><div class="live">' + (r.spanCount != null ? r.spanCount : '&mdash;') + '</div>';
+        html += '<div class="label">PrimOps</div><div class="live">' + (r.primOpsCount != null ? r.primOpsCount : '&mdash;') + '</div>';
         html += '<div class="label">Allocs</div><div class="live">' + (r.allocsCount != null ? r.allocsCount : '&mdash;') + '</div>';
         html += '<div class="label">Mem</div><div class="live">' + formatBytes(r.memBytes) + '</div>';
         html += '<div class="label">Tree edges (ops, info)</div><div class="live">' + edgesShown + ' / ' + st.edges.length + '</div>';
@@ -980,23 +983,31 @@
         var durationMs = parseFloat(durationSlider.value) * 1000;
         var mode = modeSelect.value;
 
-        // "Proportional" paces each panel by span (critical-path length) -
-        // deterministic, the same on any machine, and fair to a
-        // concurrent solver (a search split across threads finishes its
-        // animation sooner than one doing the identical total work
-        // single-threaded, matching what its Score already rewards it
-        // for) - rather than wall-clock time, which was measured on
-        // whatever machine ran the benchmark and would make the animation
-        // itself both non-reproducible and unfair to real parallelism.
-        var maxSpan = 1;
+        // "Proportional" splits span and PrimOps (see Solution.PrimOps)
+        // between two different jobs instead of picking one: span still
+        // drives *what's visibly happening* - drawPanel groups edges into
+        // simultaneous waves by their real Depth, so a genuinely concurrent
+        // solver's parallel discoveries still visibly pop in together,
+        // however this mode paces overall duration - while PrimOps drives
+        // *how long that takes*, the deterministic CPU-cost proxy Score
+        // itself is judged on. A solver like BrenThreadOptimized still
+        // visibly fans out in wide, simultaneous waves (low span), it just
+        // now takes proportionally longer to get there (high PrimOps: lost
+        // compare-and-swaps, mutex round trips - real cost span alone never
+        // charges for) - seeing the concurrency without the animation
+        // lying about what it cost. Not wall-clock time itself, which was
+        // measured on whatever machine ran the benchmark and would make
+        // the animation both non-reproducible and unfair to real
+        // parallelism.
+        var maxPace = 1;
         if (mode === 'proportional') {
-            panelState.forEach(function (st) { maxSpan = Math.max(maxSpan, st.result.spanCount || st.edges.length); });
+            panelState.forEach(function (st) { maxPace = Math.max(maxPace, st.result.primOpsCount || st.edges.length); });
         }
 
         var allDone = true;
         panelState.forEach(function (st) {
-            var span = st.result.spanCount || st.edges.length;
-            var panelDurationMs = mode === 'proportional' ? durationMs * (span / maxSpan) : durationMs;
+            var pace = st.result.primOpsCount || st.edges.length;
+            var panelDurationMs = mode === 'proportional' ? durationMs * (pace / maxPace) : durationMs;
             panelDurationMs = Math.max(panelDurationMs, 1);
             var progress = Math.min(1, elapsed / panelDurationMs);
             if (progress < 1) allDone = false;

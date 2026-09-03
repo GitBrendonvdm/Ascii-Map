@@ -16,12 +16,13 @@ type BFSSolver struct{}
 func (BFSSolver) Name() string { return "BFS" }
 
 func (BFSSolver) Solve(m *Maze) Solution {
-	leg1, visited1, edges1 := bfsShortestPath(m, m.Start, m.Key)
-	leg2, visited2, edges2 := bfsShortestPath(m, m.Key, m.Exit)
+	leg1, visited1, edges1, primOps1 := bfsShortestPath(m, m.Start, m.Key)
+	leg2, visited2, edges2, primOps2 := bfsShortestPath(m, m.Key, m.Exit)
 	return Solution{
 		Path:    joinLegs(leg1, leg2),
 		Visited: append(visited1, visited2...),
 		Edges:   append(edges1, edges2...),
+		PrimOps: primOps1 + primOps2,
 	}
 }
 
@@ -29,7 +30,7 @@ func (BFSSolver) Solve(m *Maze) Solution {
 // along the way (for the "attempted routes" red-dot overlay - see
 // Solution.Visited), and the discovery-order edges of its search tree (see
 // Solution.Edges), regardless of whether a given cell ended up on the path.
-func bfsShortestPath(m *Maze, src, dst Cell) (path, visited []Cell, edges []Edge) {
+func bfsShortestPath(m *Maze, src, dst Cell) (path, visited []Cell, edges []Edge, primOps int64) {
 	lookup := m.TeleportLookup()
 
 	visitedSet := map[Cell]bool{src: true}
@@ -40,9 +41,10 @@ func bfsShortestPath(m *Maze, src, dst Cell) (path, visited []Cell, edges []Edge
 		cur := queue[0]
 		queue = queue[1:]
 		if cur == dst {
-			return reconstructPath(parent, src, dst), visitedSlice(visitedSet), edges
+			return reconstructPath(parent, src, dst), visitedSlice(visitedSet), edges, primOps
 		}
 		for _, dir := range allDirections {
+			primOps++ // every direction checked, open or not, is a real primitive op - see Solution.PrimOps
 			if !m.isOpen(cur, dir) {
 				continue
 			}
@@ -58,7 +60,7 @@ func bfsShortestPath(m *Maze, src, dst Cell) (path, visited []Cell, edges []Edge
 			}
 		}
 	}
-	return nil, visitedSlice(visitedSet), edges // unreachable; shouldn't happen for a generator-verified maze
+	return nil, visitedSlice(visitedSet), edges, primOps // unreachable; shouldn't happen for a generator-verified maze
 }
 
 func reconstructPath(parent map[Cell]Cell, src, dst Cell) []Cell {

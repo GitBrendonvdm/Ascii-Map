@@ -34,8 +34,8 @@ func (HangeonOptimizedSolver) Solve(m *Maze) Solution {
 
 	graph := buildHangeonGraphFlat(m, idx)
 
-	leg1, edges1 := bfsOverGraphFlat(graph, cellAt, idx(m.Start), idx(m.Key))
-	leg2, edges2 := bfsOverGraphFlat(graph, cellAt, idx(m.Key), idx(m.Exit))
+	leg1, edges1, primOps1 := bfsOverGraphFlat(graph, cellAt, idx(m.Start), idx(m.Key))
+	leg2, edges2, primOps2 := bfsOverGraphFlat(graph, cellAt, idx(m.Key), idx(m.Exit))
 	edges := append(edges1, edges2...)
 
 	// bfsOverGraphFlat's edges already amount to a full record of every
@@ -56,6 +56,7 @@ func (HangeonOptimizedSolver) Solve(m *Maze) Solution {
 		Path:    joinLegs(leg1, leg2),
 		Visited: visited,
 		Edges:   edges,
+		PrimOps: primOps1 + primOps2,
 	}
 }
 

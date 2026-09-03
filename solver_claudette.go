@@ -29,12 +29,13 @@ func (ClaudetteSolver) Name() string { return "Claudette" }
 
 func (ClaudetteSolver) Solve(m *Maze) Solution {
 	s := newClaudetteState(m)
-	leg1, visited1, edges1 := s.shortestPath(m.Start, m.Key)
-	leg2, visited2, edges2 := s.shortestPath(m.Key, m.Exit)
+	leg1, visited1, edges1, primOps1 := s.shortestPath(m.Start, m.Key)
+	leg2, visited2, edges2, primOps2 := s.shortestPath(m.Key, m.Exit)
 	return Solution{
 		Path:    joinLegs(leg1, leg2),
 		Visited: append(visited1, visited2...),
 		Edges:   append(edges1, edges2...),
+		PrimOps: primOps1 + primOps2,
 	}
 }
 
@@ -76,7 +77,7 @@ func (s *claudetteState) cellAt(i int32) Cell {
 // shortestPath returns the shortest path and every cell the search visited
 // along the way (for the "attempted routes" red-dot overlay - see
 // Solution.Visited), regardless of whether that cell ended up on the path.
-func (s *claudetteState) shortestPath(src, dst Cell) (path, visited []Cell, edges []Edge) {
+func (s *claudetteState) shortestPath(src, dst Cell) (path, visited []Cell, edges []Edge, primOps int64) {
 	s.generation++
 	gen := s.generation
 
@@ -99,6 +100,7 @@ func (s *claudetteState) shortestPath(src, dst Cell) (path, visited []Cell, edge
 		}
 		curCell := s.cellAt(cur)
 		for _, dir := range allDirections {
+			primOps++ // every direction checked, open or not, is a real primitive op - see Solution.PrimOps
 			if !s.m.isOpen(curCell, dir) {
 				continue
 			}
@@ -119,9 +121,9 @@ func (s *claudetteState) shortestPath(src, dst Cell) (path, visited []Cell, edge
 
 	visited = s.visitedForGen(gen)
 	if found {
-		return s.reconstruct(srcIdx, dstIdx), visited, edges
+		return s.reconstruct(srcIdx, dstIdx), visited, edges, primOps
 	}
-	return nil, visited, edges // unreachable; shouldn't happen for a generator-verified maze
+	return nil, visited, edges, primOps // unreachable; shouldn't happen for a generator-verified maze
 }
 
 // visitedForGen scans the generation-stamped visited set for the cells

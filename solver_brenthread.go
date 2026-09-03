@@ -63,18 +63,18 @@ func (BrenThreadSolver) Name() string { return "BrenThread" }
 
 func (BrenThreadSolver) Solve(m *Maze) Solution {
 	lookup := m.TeleportLookup()
-	parent, exploreEdges, visited, span := runBrenThreads(m, lookup, m.Start, m.Key, m.Exit)
+	parent, exploreEdges, visited, span, primOps := runBrenThreads(m, lookup, m.Start, m.Key, m.Exit)
 
 	if _, ok := parent[m.Key]; !ok {
-		return Solution{Visited: visited, Edges: exploreEdges} // unreachable; shouldn't happen for a generator-verified maze
+		return Solution{Visited: visited, Edges: exploreEdges, PrimOps: primOps} // unreachable; shouldn't happen for a generator-verified maze
 	}
 	if _, ok := parent[m.Exit]; !ok {
-		return Solution{Visited: visited, Edges: exploreEdges} // unreachable; shouldn't happen for a generator-verified maze
+		return Solution{Visited: visited, Edges: exploreEdges, PrimOps: primOps} // unreachable; shouldn't happen for a generator-verified maze
 	}
 
 	leg1 := reconstructPath(parent, m.Start, m.Key) // Start is always an ancestor of every claimed cell
 
-	leg2, extraVisited, extraEdges, extraSpan := keyToExitPath(m, lookup, parent, m.Start, m.Key, m.Exit)
+	leg2, extraVisited, extraEdges, extraSpan, extraPrimOps := keyToExitPath(m, lookup, parent, m.Start, m.Key, m.Exit)
 
 	// The fallback exploration inside keyToExitPath (if it ran at all) is
 	// its own independent runBrenThreads call, rooted at Key - its Depth
@@ -94,6 +94,7 @@ func (BrenThreadSolver) Solve(m *Maze) Solution {
 		Visited: append(visited, extraVisited...),
 		Edges:   append(exploreEdges, extraEdges...),
 		Span:    span + extraSpan,
+		PrimOps: primOps + extraPrimOps,
 	}
 }
 
@@ -145,15 +146,20 @@ func (BrenThreadSolver) Solve(m *Maze) Solution {
 //   - Only if none of the above apply does this fall back to a second,
 //     independent flood-fill rooted at Key, paying for that extra
 //     exploration only in this one case.
-func keyToExitPath(m *Maze, lookup map[Cell]Cell, parent map[Cell]Cell, root, key, exit Cell) (path []Cell, visited []Cell, edges []Edge, span int) {
-	if isAncestor(parent, root, key, exit) {
-		return reconstructPath(parent, key, exit), nil, nil, 0
+func keyToExitPath(m *Maze, lookup map[Cell]Cell, parent map[Cell]Cell, root, key, exit Cell) (path []Cell, visited []Cell, edges []Edge, span int, primOps int64) {
+	isAnc, isAncOps := isAncestor(parent, root, key, exit)
+	primOps += isAncOps
+	if isAnc {
+		return reconstructPath(parent, key, exit), nil, nil, 0, primOps
 	}
 
-	rk := localRoot(parent, lookup, root, key)
-	re := localRoot(parent, lookup, root, exit)
+	rk, rkOps := localRoot(parent, lookup, root, key)
+	re, reOps := localRoot(parent, lookup, root, exit)
+	primOps += rkOps + reOps
 	if rk == re {
-		return pathBetween(parent, rk, key, exit), nil, nil, 0
+		betweenPath, betweenOps := pathBetween(parent, rk, key, exit)
+		primOps += betweenOps
+		return betweenPath, nil, nil, 0, primOps
 	}
 
 	// keyReach: Key back to its localRoot - as far as it's ever safe to
@@ -162,14 +168,17 @@ func keyToExitPath(m *Maze, lookup map[Cell]Cell, parent map[Cell]Cell, root, ke
 	// root. A bridge anywhere between these two is a genuine shortcut.
 	keyReach := reconstructPath(parent, rk, key)
 	exitRoute := reconstructPath(parent, root, exit)
-	if a, b, ok := findBridge(m, lookup, keyReach, exitRoute); ok {
+	a, b, ok, bridgeOps := findBridge(m, lookup, keyReach, exitRoute)
+	primOps += bridgeOps
+	if ok {
 		toBridge := reverseUpTo(keyReach, a) // key -> ... -> a, within keyReach's already-safe direction
 		fromBridge := exitRoute[indexOf(exitRoute, b):]
-		return append(toBridge, fromBridge...), nil, nil, 0
+		return append(toBridge, fromBridge...), nil, nil, 0, primOps
 	}
 
-	fallbackParent, fallbackEdges, fallbackVisited, fallbackSpan := runBrenThreads(m, lookup, key, exit)
-	return reconstructPath(fallbackParent, key, exit), fallbackVisited, fallbackEdges, fallbackSpan
+	fallbackParent, fallbackEdges, fallbackVisited, fallbackSpan, fallbackPrimOps := runBrenThreads(m, lookup, key, exit)
+	primOps += fallbackPrimOps
+	return reconstructPath(fallbackParent, key, exit), fallbackVisited, fallbackEdges, fallbackSpan, primOps
 }
 
 // findBridge looks for a single, ordinary legal move directly connecting
@@ -182,22 +191,26 @@ func keyToExitPath(m *Maze, lookup map[Cell]Cell, parent map[Cell]Cell, root, ke
 // actually shortens the resulting path - the first hit found is used
 // as-is, not the shortest possible one, matching this solver's disclosed
 // no-optimality trade elsewhere.
-func findBridge(m *Maze, lookup map[Cell]Cell, route1, route2 []Cell) (a, b Cell, ok bool) {
+func findBridge(m *Maze, lookup map[Cell]Cell, route1, route2 []Cell) (a, b Cell, ok bool, primOps int64) {
 	for i := len(route1) - 1; i >= 0; i-- {
 		for j := 0; j < len(route2); j++ {
-			if legalMove(m, lookup, route1[i], route2[j]) {
-				return route1[i], route2[j], true
+			legal, opCost := legalMove(m, lookup, route1[i], route2[j])
+			primOps += opCost
+			if legal {
+				return route1[i], route2[j], true, primOps
 			}
 		}
 	}
-	return Cell{}, Cell{}, false
+	return Cell{}, Cell{}, false, primOps
 }
 
 // legalMove reports whether a single step from a to b is legal - an open
 // wall in some direction (teleport-resolved), the same one-step legality
 // ValidatePath itself checks.
-func legalMove(m *Maze, lookup map[Cell]Cell, a, b Cell) bool {
+func legalMove(m *Maze, lookup map[Cell]Cell, a, b Cell) (bool, int64) {
+	var primOps int64
 	for _, dir := range allDirections {
+		primOps++ // every direction checked, open or not, is a real primitive op - see Solution.PrimOps
 		if !m.isOpen(a, dir) {
 			continue
 		}
@@ -206,10 +219,10 @@ func legalMove(m *Maze, lookup map[Cell]Cell, a, b Cell) bool {
 			next = dest
 		}
 		if next == b {
-			return true
+			return true, primOps
 		}
 	}
-	return false
+	return false, primOps
 }
 
 // reverseUpTo returns route (ordered root-to-leaf, e.g. rk->...->key)
@@ -242,19 +255,21 @@ func indexOf(route []Cell, cell Cell) int {
 // way back at all if it was reached via a redirect - equivalently, cur
 // itself being a teleporter endpoint, since resolve() means a cell can
 // only ever be reached via redirect if it's registered as one).
-func localRoot(parent map[Cell]Cell, lookup map[Cell]Cell, root, cell Cell) Cell {
+func localRoot(parent map[Cell]Cell, lookup map[Cell]Cell, root, cell Cell) (Cell, int64) {
+	var primOps int64
 	cur := cell
 	for cur != root {
+		primOps++ // each link in the ancestor-chain walk is a real primitive op - see Solution.PrimOps
 		if _, ok := lookup[cur]; ok {
-			return cur // cur itself was reached via a redirect; no general way back
+			return cur, primOps // cur itself was reached via a redirect; no general way back
 		}
 		p := parent[cur]
 		if _, ok := lookup[p]; ok {
-			return cur // stepping toward p's position would redirect elsewhere, never landing on p
+			return cur, primOps // stepping toward p's position would redirect elsewhere, never landing on p
 		}
 		cur = p
 	}
-	return cur
+	return cur, primOps
 }
 
 // isAncestor reports whether a is an ancestor of b in the full claim
@@ -263,13 +278,15 @@ func localRoot(parent map[Cell]Cell, lookup map[Cell]Cell, root, cell Cell) Cell
 // chain into a sequence of moves - so it's safe regardless of how many
 // teleport-assisted edges it crosses; only *using* a chain as a reversed
 // path is what needs the reversibility restriction elsewhere.
-func isAncestor(parent map[Cell]Cell, root, a, b Cell) bool {
+func isAncestor(parent map[Cell]Cell, root, a, b Cell) (bool, int64) {
+	var primOps int64
 	for cur := b; ; {
+		primOps++ // each link in the ancestor-chain walk is a real primitive op - see Solution.PrimOps
 		if cur == a {
-			return true
+			return true, primOps
 		}
 		if cur == root {
-			return false
+			return false, primOps
 		}
 		cur = parent[cur]
 	}
@@ -291,12 +308,15 @@ func isAncestor(parent map[Cell]Cell, root, a, b Cell) bool {
 // same disclosed trade as everywhere else in this solver: a real,
 // deterministic shortcut through the tree as it was actually built, not a
 // guarantee of the shortest one that could exist.
-func pathBetween(parent map[Cell]Cell, root, a, b Cell) []Cell {
+func pathBetween(parent map[Cell]Cell, root, a, b Cell) ([]Cell, int64) {
+	var primOps int64
+
 	// ancestorDist maps every cell on a's chain up to root to its
 	// distance from a, so the walk up from b below can recognize the LCA
 	// in O(1) per step instead of rescanning a's whole chain each time.
 	ancestorDist := map[Cell]int{}
 	for cur, dist := a, 0; ; dist++ {
+		primOps++ // each link in the ancestor-chain walk is a real primitive op - see Solution.PrimOps
 		ancestorDist[cur] = dist
 		if cur == root {
 			break
@@ -310,6 +330,7 @@ func pathBetween(parent map[Cell]Cell, root, a, b Cell) []Cell {
 	bToLCA := []Cell{b}
 	cur := b
 	for {
+		primOps++
 		if _, onAChain := ancestorDist[cur]; onAChain {
 			break
 		}
@@ -320,6 +341,7 @@ func pathBetween(parent map[Cell]Cell, root, a, b Cell) []Cell {
 
 	aToLCA := []Cell{a}
 	for cur := a; cur != lca; {
+		primOps++
 		cur = parent[cur]
 		aToLCA = append(aToLCA, cur)
 	}
@@ -330,7 +352,7 @@ func pathBetween(parent map[Cell]Cell, root, a, b Cell) []Cell {
 	for i := len(bToLCA) - 2; i >= 0; i-- {
 		path = append(path, bToLCA[i])
 	}
-	return path
+	return path, primOps
 }
 
 // runBrenThreads races the threads to completion, starting from `root`,
@@ -367,12 +389,19 @@ func pathBetween(parent map[Cell]Cell, root, a, b Cell) []Cell {
 //     underlying reason. Stopping early also means span now reflects the
 //     effort actually spent reaching the targets, not incidental depth
 //     reached somewhere else in the maze that nobody needed.
-func runBrenThreads(m *Maze, lookup map[Cell]Cell, root Cell, targets ...Cell) (parent map[Cell]Cell, exploreEdges []Edge, visited []Cell, span int) {
+func runBrenThreads(m *Maze, lookup map[Cell]Cell, root Cell, targets ...Cell) (parent map[Cell]Cell, exploreEdges []Edge, visited []Cell, span int, primOps int64) {
 	claimed := map[Cell]bool{root: true}
 	parent = map[Cell]Cell{}
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	maxDepth := 0
+	// totalPrimOps (see Solution.PrimOps) is written exactly once per
+	// spawnFrom call, atomically, right as it returns - see the deferred
+	// merge below. Each call accumulates into its own goroutine-local
+	// localPrimOps first (no synchronization needed for that, it's never
+	// shared), so this adds one atomic op per claimed cell, not one per
+	// direction checked.
+	var totalPrimOps int64
 
 	remaining := 0
 	for _, t := range targets {
@@ -427,10 +456,14 @@ func runBrenThreads(m *Maze, lookup map[Cell]Cell, root Cell, targets ...Cell) (
 	var spawnFrom func(pos Cell, depth int)
 	spawnFrom = func(pos Cell, depth int) {
 		defer wg.Done()
+		var localPrimOps int64
+		defer func() { atomic.AddInt64(&totalPrimOps, localPrimOps) }()
 		for _, dir := range allDirections {
+			localPrimOps++ // atomic load of `done` - see Solution.PrimOps
 			if atomic.LoadInt32(&done) != 0 {
 				return
 			}
+			localPrimOps++ // the direction/candidate-move check itself
 			if !m.isOpen(pos, dir) {
 				continue // move not allowed
 			}
@@ -438,6 +471,7 @@ func runBrenThreads(m *Maze, lookup map[Cell]Cell, root Cell, targets ...Cell) (
 			if dest, ok := lookup[next]; ok {
 				next = dest // forced, no choice - continue from the new point
 			}
+			localPrimOps += 3 // the mutex round trip inside claim, win or lose
 			if !claim(pos, next, depth+1) {
 				continue // already covered by another thread
 			}
@@ -449,6 +483,7 @@ func runBrenThreads(m *Maze, lookup map[Cell]Cell, root Cell, targets ...Cell) (
 	wg.Add(1)
 	go spawnFrom(root, 0)
 	wg.Wait()
+	primOps = totalPrimOps
 
 	visited = make([]Cell, 0, len(parent)+1)
 	visited = append(visited, root)
@@ -456,5 +491,5 @@ func runBrenThreads(m *Maze, lookup map[Cell]Cell, root Cell, targets ...Cell) (
 		visited = append(visited, c)
 	}
 
-	return parent, exploreEdges, visited, maxDepth
+	return parent, exploreEdges, visited, maxDepth, primOps
 }

@@ -48,6 +48,37 @@ type Solution struct {
 	// time used to answer, before this project moved to a fully
 	// machine-independent score (see scoring.go).
 	Span int
+
+	// PrimOps is a deterministic, machine-independent stand-in for real CPU
+	// cost - the one dimension wall-clock/CPU time used to capture that
+	// nothing else here does. Steps/Span/Allocs/mem all describe *what* got
+	// discovered and how much memory it took; none of them charge for the
+	// raw looping, branching, and synchronization work spent getting there,
+	// which is exactly where two solvers with near-identical allocs can
+	// still have wildly different real CPU time.
+	//
+	// Every direction checked from a cell - open wall or not, teleport-
+	// redirected or not, successful or a wasted attempt - counts as 1
+	// PrimOp: the same "every candidate move costs the same regardless of
+	// outcome" convention Steps/Ops already use. On top of that baseline, an
+	// actual synchronization primitive adds its own real, extra cost no
+	// plain memory access pays:
+	//
+	//   - +1 for a single atomic operation (CAS, atomic load/store)
+	//   - +3 for a mutex lock/unlock round trip - a rough, documented
+	//     multiplier, not a literal cycle count, representing that a lock
+	//     round trip does meaningfully more work than one atomic op
+	//   - +heapOpCost(n) for a binary-heap push or pop of a heap currently
+	//     holding n items - a stand-in for the real comparisons/swaps a
+	//     binary heap needs to maintain order that grows with the heap's
+	//     depth, unlike a plain FIFO or bucket queue's flat O(1) push/pop
+	//     (see heapOpCost's own doc comment)
+	//
+	// This is a model, not a profiler: a deterministic proxy for relative
+	// CPU cost, reproducible identically on any machine, not a claim that
+	// any specific operation takes exactly that many nanoseconds on any
+	// specific one.
+	PrimOps int64
 }
 
 // Edge is one step of a search's discovery tree: the search was standing on
@@ -127,4 +158,22 @@ func visitedSlice(set map[Cell]bool) []Cell {
 		cells = append(cells, c)
 	}
 	return cells
+}
+
+// heapOpCost is a binary heap push or pop's PrimOps charge (see
+// Solution.PrimOps): the heap's height in levels (a size-n heap is a
+// complete binary tree floor(log2(n))+1 levels deep) plus 1 for the
+// operation itself - a deterministic stand-in for the real number of
+// comparisons/swaps a sift-up or sift-down might need to restore the
+// ordering invariant. A plain FIFO or bucket queue's flat O(1) push/pop
+// pays nothing extra beyond the baseline per-direction PrimOp every solver
+// already charges; a binary heap's cost grows with its depth instead. Call
+// with the heap's size *before* the push/pop being charged.
+func heapOpCost(n int) int64 {
+	depth := int64(0)
+	for n > 0 {
+		depth++
+		n >>= 1
+	}
+	return depth + 1
 }

@@ -6,11 +6,11 @@ import (
 )
 
 // scoredResult attaches a combined score to a run: the geometric mean of
-// four ratios - steps, span (critical-path length), allocation count
-// (allocs), and memory allocated (mem) - each normalized against
-// whichever algorithm did best in that ONE dimension on THIS maze. 1.0
-// means "matched the best in every dimension on this maze"; higher is
-// worse.
+// five ratios - steps, span (critical-path length), primOps (a
+// deterministic CPU-cost proxy), allocation count (allocs), and memory
+// allocated (mem) - each normalized against whichever algorithm did best
+// in that ONE dimension on THIS maze. 1.0 means "matched the best in
+// every dimension on this maze"; higher is worse.
 //
 // Deliberately not wall-clock time or CPU time. Both are still measured
 // (see runResult) and shown in the viewer as "does this feel fast"
@@ -18,10 +18,21 @@ import (
 // happens to be at that exact moment - the same algorithm on the same
 // maze can and does report a different number every run, purely from OS
 // scheduling noise unrelated to the algorithm itself. Steps, span,
-// allocs, and mem are all a pure function of the code path taken: the
-// same maze, solved by the same algorithm, produces the exact same
-// numbers every time, on any machine, whether it's idle or swamped with
-// other work - which is what makes them fair to actually rank on.
+// primOps, allocs, and mem are all a pure function of the code path
+// taken: the same maze, solved by the same algorithm, produces the exact
+// same numbers every time, on any machine, whether it's idle or swamped
+// with other work - which is what makes them fair to actually rank on.
+//
+// primOps exists specifically to close a real gap the other four
+// dimensions leave open: none of steps/span/allocs/mem charge anything
+// for raw looping, branching, or synchronization work that doesn't
+// allocate or doesn't change what gets discovered. A goroutine-pool
+// solver's lost CAS attempts, mutex round trips, and bucket-queue scans
+// are exactly this kind of cost - measured directly on this project's own
+// solvers, BrenThreadOptimized's real CPU time ran roughly an order of
+// magnitude higher than a comparably-scoring single-threaded solver's,
+// entirely invisible to allocs/mem/span alone (see Solution.PrimOps for
+// the exact, deterministic accounting).
 //
 // Also deliberately not ops (len(Edges), total discoveries made): span is
 // used instead precisely because ops conflates two different things for a
@@ -49,11 +60,12 @@ import (
 // magnitudes.
 type scoredResult struct {
 	runResult
-	stepsRatio  float64
-	spanRatio   float64
-	allocsRatio float64
-	memRatio    float64
-	score       float64
+	stepsRatio   float64
+	spanRatio    float64
+	primOpsRatio float64
+	allocsRatio  float64
+	memRatio     float64
+	score        float64
 }
 
 // scoreResults scores every valid (non-disqualified) result, sorted
@@ -70,13 +82,16 @@ func scoreResults(results []runResult) []scoredResult {
 		return nil
 	}
 
-	bestSteps, bestSpan, bestAllocs, bestMem := valid[0].steps, valid[0].span, valid[0].allocs, valid[0].memBytes
+	bestSteps, bestSpan, bestPrimOps, bestAllocs, bestMem := valid[0].steps, valid[0].span, valid[0].primOps, valid[0].allocs, valid[0].memBytes
 	for _, r := range valid[1:] {
 		if r.steps < bestSteps {
 			bestSteps = r.steps
 		}
 		if r.span < bestSpan {
 			bestSpan = r.span
+		}
+		if r.primOps < bestPrimOps {
+			bestPrimOps = r.primOps
 		}
 		if r.allocs < bestAllocs {
 			bestAllocs = r.allocs
@@ -95,6 +110,9 @@ func scoreResults(results []runResult) []scoredResult {
 	if bestSpan < 1 {
 		bestSpan = 1
 	}
+	if bestPrimOps < 1 {
+		bestPrimOps = 1
+	}
 	if bestAllocs < 1 {
 		bestAllocs = 1
 	}
@@ -104,12 +122,15 @@ func scoreResults(results []runResult) []scoredResult {
 
 	scored := make([]scoredResult, len(valid))
 	for i, r := range valid {
-		steps, span, allocs, mem := r.steps, r.span, r.allocs, r.memBytes
+		steps, span, primOps, allocs, mem := r.steps, r.span, r.primOps, r.allocs, r.memBytes
 		if steps < 1 {
 			steps = 1
 		}
 		if span < 1 {
 			span = 1
+		}
+		if primOps < 1 {
+			primOps = 1
 		}
 		if allocs < 1 {
 			allocs = 1
@@ -120,20 +141,22 @@ func scoreResults(results []runResult) []scoredResult {
 
 		stepsRatio := float64(steps) / float64(bestSteps)
 		spanRatio := float64(span) / float64(bestSpan)
+		primOpsRatio := float64(primOps) / float64(bestPrimOps)
 		allocsRatio := float64(allocs) / float64(bestAllocs)
 		memRatio := float64(mem) / float64(bestMem)
 
 		scored[i] = scoredResult{
-			runResult:   r,
-			stepsRatio:  stepsRatio,
-			spanRatio:   spanRatio,
-			allocsRatio: allocsRatio,
-			memRatio:    memRatio,
-			// Geometric mean of the four ratios: equal weight per
+			runResult:    r,
+			stepsRatio:   stepsRatio,
+			spanRatio:    spanRatio,
+			primOpsRatio: primOpsRatio,
+			allocsRatio:  allocsRatio,
+			memRatio:     memRatio,
+			// Geometric mean of the five ratios: equal weight per
 			// dimension, and - unlike a raw product - stays on the same
 			// human-readable scale as the ratios themselves (2.0 means
-			// "twice as bad overall", not "sixteen times as bad").
-			score: math.Sqrt(math.Sqrt(stepsRatio * spanRatio * allocsRatio * memRatio)),
+			// "twice as bad overall", not "thirty-two times as bad").
+			score: math.Pow(stepsRatio*spanRatio*primOpsRatio*allocsRatio*memRatio, 1.0/5.0),
 		}
 	}
 	sort.Slice(scored, func(i, j int) bool {

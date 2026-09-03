@@ -14,8 +14,9 @@ func (HangeonOptimisedV2Solver) Name() string { return "HangeonOptimisedV2" }
 func (HangeonOptimisedV2Solver) Solve(m *Maze) Solution {
 	s := newHangeonOptimisedV2State(m)
 	edges := make([]Edge, 0, 2*(len(s.queue)-1))
-	leg1, edges := s.shortestPath(m.Start, m.Key, edges)
-	leg2, edges := s.shortestPath(m.Key, m.Exit, edges)
+	var primOps int64
+	leg1, edges, primOps := s.shortestPath(m.Start, m.Key, edges, primOps)
+	leg2, edges, primOps := s.shortestPath(m.Key, m.Exit, edges, primOps)
 
 	visited := make([]Cell, 0, len(edges)+1)
 	visited = append(visited, m.Start)
@@ -23,9 +24,9 @@ func (HangeonOptimisedV2Solver) Solve(m *Maze) Solution {
 		visited = append(visited, e.To)
 	}
 	if leg1 == nil || leg2 == nil {
-		return Solution{Visited: visited, Edges: edges}
+		return Solution{Visited: visited, Edges: edges, PrimOps: primOps}
 	}
-	return Solution{Path: joinLegs(leg1, leg2), Visited: visited, Edges: edges}
+	return Solution{Path: joinLegs(leg1, leg2), Visited: visited, Edges: edges, PrimOps: primOps}
 }
 
 type hangeonOptimisedV2State struct {
@@ -121,7 +122,7 @@ func (s *hangeonOptimisedV2State) cellAt(i int32) Cell {
 	return Cell{X: int(i) % s.width, Y: int(i) / s.width}
 }
 
-func (s *hangeonOptimisedV2State) shortestPath(src, dst Cell, edges []Edge) ([]Cell, []Edge) {
+func (s *hangeonOptimisedV2State) shortestPath(src, dst Cell, edges []Edge, primOps int64) ([]Cell, []Edge, int64) {
 	s.generation++
 	gen := s.generation
 	srcIdx, dstIdx := s.idx(src), s.idx(dst)
@@ -136,11 +137,12 @@ func (s *hangeonOptimisedV2State) shortestPath(src, dst Cell, edges []Edge) ([]C
 		cur := s.queue[head]
 		head++
 		if cur == dstIdx {
-			return s.reconstruct(srcIdx, dstIdx), edges
+			return s.reconstruct(srcIdx, dstIdx), edges, primOps
 		}
 
 		fromCell := s.cellAt(cur)
 		for _, landing := range s.neighbors[s.offsets[cur]:s.offsets[cur+1]] {
+			primOps++ // every neighbor examined is a real primitive op - see Solution.PrimOps
 			if s.visitedGen[landing] == gen {
 				continue
 			}
@@ -151,7 +153,7 @@ func (s *hangeonOptimisedV2State) shortestPath(src, dst Cell, edges []Edge) ([]C
 			edges = append(edges, Edge{From: fromCell, To: s.cellAt(landing)})
 		}
 	}
-	return nil, edges
+	return nil, edges, primOps
 }
 
 func (s *hangeonOptimisedV2State) reconstruct(src, dst int32) []Cell {

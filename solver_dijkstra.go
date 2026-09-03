@@ -25,12 +25,13 @@ type DijkstraSolver struct{}
 func (DijkstraSolver) Name() string { return "Dijkstra" }
 
 func (DijkstraSolver) Solve(m *Maze) Solution {
-	leg1, visited1, edges1 := dijkstraPath(m, m.Start, m.Key)
-	leg2, visited2, edges2 := dijkstraPath(m, m.Key, m.Exit)
+	leg1, visited1, edges1, primOps1 := dijkstraPath(m, m.Start, m.Key)
+	leg2, visited2, edges2, primOps2 := dijkstraPath(m, m.Key, m.Exit)
 	return Solution{
 		Path:    joinLegs(leg1, leg2),
 		Visited: append(visited1, visited2...),
 		Edges:   append(edges1, edges2...),
+		PrimOps: primOps1 + primOps2,
 	}
 }
 
@@ -58,7 +59,7 @@ func (q *dijkstraQueue) Pop() interface{} {
 	return item
 }
 
-func dijkstraPath(m *Maze, src, dst Cell) (path, visited []Cell, edges []Edge) {
+func dijkstraPath(m *Maze, src, dst Cell) (path, visited []Cell, edges []Edge, primOps int64) {
 	lookup := m.TeleportLookup()
 
 	dist := map[Cell]int{src: 0}
@@ -67,9 +68,11 @@ func dijkstraPath(m *Maze, src, dst Cell) (path, visited []Cell, edges []Edge) {
 
 	pq := &dijkstraQueue{}
 	heap.Init(pq)
+	primOps += heapOpCost(pq.Len()) // see Solution.PrimOps: a heap push/pop costs more than a plain queue's
 	heap.Push(pq, &dijkstraItem{cell: src, priority: 0})
 
 	for pq.Len() > 0 {
+		primOps += heapOpCost(pq.Len())
 		cur := heap.Pop(pq).(*dijkstraItem).cell
 		if visitedSet[cur] {
 			continue
@@ -83,10 +86,11 @@ func dijkstraPath(m *Maze, src, dst Cell) (path, visited []Cell, edges []Edge) {
 			edges = append(edges, Edge{From: parent[cur], To: cur})
 		}
 		if cur == dst {
-			return reconstructPath(parent, src, dst), visitedSlice(visitedSet), edges
+			return reconstructPath(parent, src, dst), visitedSlice(visitedSet), edges, primOps
 		}
 
 		for _, dir := range allDirections {
+			primOps++ // every direction checked, open or not, is a real primitive op - see Solution.PrimOps
 			if !m.isOpen(cur, dir) {
 				continue
 			}
@@ -98,9 +102,10 @@ func dijkstraPath(m *Maze, src, dst Cell) (path, visited []Cell, edges []Edge) {
 			if best, ok := dist[landing]; !ok || tentative < best {
 				dist[landing] = tentative
 				parent[landing] = cur
+				primOps += heapOpCost(pq.Len())
 				heap.Push(pq, &dijkstraItem{cell: landing, priority: tentative})
 			}
 		}
 	}
-	return nil, visitedSlice(visitedSet), edges // unreachable; shouldn't happen for a generator-verified maze
+	return nil, visitedSlice(visitedSet), edges, primOps // unreachable; shouldn't happen for a generator-verified maze
 }
