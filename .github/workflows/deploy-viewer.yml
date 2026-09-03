@@ -43,6 +43,7 @@ jobs:
         run: |
           mkdir -p _site
           cp viewer.html _site/
+          cp viewer.html _site/index.html
           cp bench_results.json _site/
 
       - uses: actions/upload-pages-artifact@v3
