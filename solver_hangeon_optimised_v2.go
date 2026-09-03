@@ -1,7 +1,5 @@
 package main
 
-import "math/bits"
-
 func init() {
 	Register(&HangeonOptimisedV2Solver{})
 }
@@ -61,10 +59,13 @@ func newHangeonOptimisedV2State(m *Maze) *hangeonOptimisedV2State {
 	}
 
 	// First count the directed edges; then prefix-sum them into CSR offsets.
+	// Keep this tiny fixed-degree operation local rather than depending on a
+	// graph or bitset package: the four direction flags are the complete
+	// graph-building vocabulary for this solver.
 	s.offsets = make([]uint32, n+1)
 	for i := 0; i < n; i++ {
 		mask := m.open[i/m.Width][i%m.Width]
-		s.offsets[i+1] = s.offsets[i] + uint32(bits.OnesCount(uint(mask)))
+		s.offsets[i+1] = s.offsets[i] + hangeonOptimisedV2Degree(mask)
 	}
 
 	// Materialize the explicit graph in stable N,S,E,W edge order.
@@ -93,6 +94,23 @@ func newHangeonOptimisedV2State(m *Maze) *hangeonOptimisedV2State {
 		}
 	}
 	return s
+}
+
+func hangeonOptimisedV2Degree(mask int) uint32 {
+	var degree uint32
+	if mask&North != 0 {
+		degree++
+	}
+	if mask&South != 0 {
+		degree++
+	}
+	if mask&East != 0 {
+		degree++
+	}
+	if mask&West != 0 {
+		degree++
+	}
+	return degree
 }
 
 func (s *hangeonOptimisedV2State) idx(c Cell) int32 {
