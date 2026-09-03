@@ -284,8 +284,9 @@ is genuinely two hops, not an abstract "is this direction open" bit),
 keyed by a `Coordinate{Row, Col}`-keyed map to fit that sparser structure -
 `HangeonOptimized` is the same model built directly at one vertex per
 logical cell, skipping the gaps entirely, backed by a flat `[][]int32`
-instead of a map since its graph is already dense (one node per cell, no
-sparsity to spend a map on). Forced teleportation is folded into the graph
-at construction time on both: any edge landing on a teleporter's trigger
-tile is rewired straight to its paired tile, so the traversal itself stays
-completely oblivious to teleporters.
+instead of a map since its graph is already dense. `HangeonOptimisedV2` is
+the CSR experiment: the same teleport-resolved directed graph represented by
+one offset array and one contiguous neighbor array, with a generation-stamped
+BFS workspace reused across both legs. In both variants an edge landing on a
+teleporter trigger is rewired straight to its paired tile, so traversal stays
+oblivious to teleporters.
