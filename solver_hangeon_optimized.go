@@ -63,6 +63,18 @@ func (HangeonOptimizedSolver) Solve(m *Maze) Solution {
 // the 2x-scaled grid and without the map-based hangeonGraph type: one flat
 // slice per logical maze cell, one edge per open direction, redirected
 // straight to a teleporter's paired cell where applicable.
+//
+// Every cell's neighbor list is a *view* into one shared, preallocated
+// []int32 (flatStore, len(allDirections) slots reserved per cell - the
+// worst case of every direction being open) rather than its own
+// independently append-grown slice - the same fix buildFlatNeighbors
+// (solver_brenthread_optimized.go) already applies for the identical
+// reason: a cell with 3-4 open directions would otherwise force append to
+// reallocate its backing array 2-3 times as it grows past capacity 1, then
+// 2, then 4, and across every cell in the maze that's most of this
+// solver's allocation cost for no benefit - len(allDirections) is already
+// known here, fixed and small. One allocation for the whole adjacency
+// list instead of up to one-per-cell (times up to three regrowths each).
 func buildHangeonGraphFlat(m *Maze, idx func(Cell) int32) [][]int32 {
 	n := m.Width * m.Height
 	partner := make([]int32, n)
@@ -79,16 +91,21 @@ func buildHangeonGraphFlat(m *Maze, idx func(Cell) int32) [][]int32 {
 		return i
 	}
 
+	flatStore := make([]int32, n*len(allDirections))
 	graph := make([][]int32, n)
 	for y := 0; y < m.Height; y++ {
 		for x := 0; x < m.Width; x++ {
 			c := Cell{X: x, Y: y}
 			i := idx(c)
+			base := int(i) * len(allDirections)
+			count := 0
 			for _, dir := range allDirections {
 				if m.isOpen(c, dir) {
-					graph[i] = append(graph[i], resolve(idx(m.neighbor(c, dir))))
+					flatStore[base+count] = resolve(idx(m.neighbor(c, dir)))
+					count++
 				}
 			}
+			graph[i] = flatStore[base : base+count : base+count]
 		}
 	}
 	return graph
