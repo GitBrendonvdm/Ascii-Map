@@ -14,8 +14,12 @@ go build -o maze.exe .
 ## Generate and solve one maze
 
 ```bash
-./maze.exe -seed 42 -width 21 -height 15 -teleporters 2
+./maze.exe -seed 42 -size normal -teleporters 2
 ```
+
+Size presets: `-size normal` (21x15, the default), `-size large` (100x100),
+and `-size xlarge` (250x250). Explicit `-width` and `-height` flags override
+either dimension of the selected preset.
 
 Every registered algorithm runs against the same maze, each getting its own
 untouched clone. A leaderboard (ranked by score - see Scoring below, smallest
@@ -33,6 +37,7 @@ Flags:
 | `-seed`            | 42        | RNG seed - same seed + dimensions + style = identical maze            |
 | `-width`           | 21        | maze width in cells (min 5)                                           |
 | `-height`          | 15        | maze height in cells (min 5)                                          |
+| `-size`            | "normal"  | map-size preset: `normal` (21x15), `large` (100x100), or scary `xlarge` (250x250); explicit width/height override it |
 | `-teleporters`     | 2         | number of teleporter pairs                                            |
 | `-style`           | "Braided" | maze generation style; `-list-styles` prints every registered one     |
 | `-braid`           | 0.15      | probability of knocking down an extra wall to create a loop (Braided only) |
@@ -284,8 +289,9 @@ is genuinely two hops, not an abstract "is this direction open" bit),
 keyed by a `Coordinate{Row, Col}`-keyed map to fit that sparser structure -
 `HangeonOptimized` is the same model built directly at one vertex per
 logical cell, skipping the gaps entirely, backed by a flat `[][]int32`
-instead of a map since its graph is already dense (one node per cell, no
-sparsity to spend a map on). Forced teleportation is folded into the graph
-at construction time on both: any edge landing on a teleporter's trigger
-tile is rewired straight to its paired tile, so the traversal itself stays
-completely oblivious to teleporters.
+instead of a map since its graph is already dense. `HangeonOptimisedV2` is
+the CSR experiment: the same teleport-resolved directed graph represented by
+one offset array and one contiguous neighbor array, with a generation-stamped
+BFS workspace reused across both legs. In both variants an edge landing on a
+teleporter trigger is rewired straight to its paired tile, so traversal stays
+oblivious to teleporters.
