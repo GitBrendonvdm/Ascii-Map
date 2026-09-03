@@ -1,0 +1,911 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Ascii-Maze Results Viewer</title>
+<style>
+    :root {
+        --bg: #14161c;
+        --panel: #1c1f28;
+        --panel-alt: #21242f;
+        --border: #2e3240;
+        --text: #e4e6eb;
+        --text-dim: #8b90a0;
+        --accent: #4da3ff;
+        --wall: #3a3f52;
+        --path: #33d17a;
+        --visited: #ff5c5c;
+        --trail: #9aa2b8;
+        --start: #ffd166;
+        --key: #b48cff;
+        --exit: #4da3ff;
+        --good: #33d17a;
+        --bad: #ff5c5c;
+        font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+    .mono { font-family: Consolas, "Cascadia Mono", monospace; }
+    header {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 10px 16px;
+        background: var(--panel);
+        border-bottom: 1px solid var(--border);
+        flex-shrink: 0;
+    }
+    header h1 { font-size: 15px; margin: 0; font-weight: 600; white-space: nowrap; }
+    header .status { font-size: 12px; color: var(--text-dim); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    button, .filebtn {
+        background: var(--panel-alt);
+        border: 1px solid var(--border);
+        color: var(--text);
+        padding: 6px 12px;
+        border-radius: 6px;
+        font-size: 12px;
+        cursor: pointer;
+    }
+    button:hover, .filebtn:hover { border-color: var(--accent); }
+    button:disabled { opacity: 0.4; cursor: default; }
+    button.primary { background: var(--accent); color: #0a0d14; border-color: var(--accent); font-weight: 600; }
+    input[type=file] { display: none; }
+    select {
+        background: var(--panel-alt) url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="10" height="6" viewBox="0 0 10 6"><path d="M1 1l4 4 4-4" fill="none" stroke="%238b90a0" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>') no-repeat right 10px center;
+        border: 1px solid var(--border);
+        color: var(--text);
+        padding: 6px 28px 6px 12px;
+        border-radius: 6px;
+        font-size: 12px;
+        cursor: pointer;
+        appearance: none;
+        -webkit-appearance: none;
+        -moz-appearance: none;
+        color-scheme: dark;
+    }
+    select:hover { border-color: var(--accent); }
+    select:focus { outline: none; border-color: var(--accent); }
+    select option { background: var(--panel-alt); color: var(--text); }
+    .layout { flex: 1; display: flex; min-height: 0; }
+    aside {
+        width: 300px;
+        flex-shrink: 0;
+        background: var(--panel);
+        border-right: 1px solid var(--border);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+    .tabs { display: flex; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+    .tabs button { flex: 1; border: none; border-radius: 0; background: transparent; border-bottom: 2px solid transparent; }
+    .tabs button.active { border-bottom: 2px solid var(--accent); color: var(--accent); }
+    .tabpane { flex: 1; overflow-y: auto; padding: 8px; }
+    .maze-item {
+        padding: 8px 10px;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 12px;
+        margin-bottom: 4px;
+        border: 1px solid transparent;
+    }
+    .maze-item:hover { background: var(--panel-alt); }
+    .maze-item.active { background: var(--panel-alt); border-color: var(--accent); }
+    .maze-item .style { color: var(--text-dim); }
+    table { width: 100%; border-collapse: collapse; font-size: 11px; }
+    th, td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+    th { color: var(--text-dim); font-weight: 500; cursor: pointer; position: sticky; top: 0; background: var(--panel); }
+    th:hover { color: var(--accent); }
+    tr.hl { background: rgba(77, 163, 255, 0.12); }
+    tr.dq td { color: var(--bad); opacity: 0.7; }
+    main { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+    .controls {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 10px 16px;
+        background: var(--panel);
+        border-bottom: 1px solid var(--border);
+        flex-shrink: 0;
+        flex-wrap: wrap;
+    }
+    .controls .group { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-dim); }
+    .controls input[type=range] { width: 140px; }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0; max-height: 84px; overflow-y: auto; }
+    .chip {
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 4px 10px;
+        font-size: 11px;
+        cursor: pointer;
+        color: var(--text-dim);
+        user-select: none;
+    }
+    .chip.on { border-color: var(--accent); color: var(--accent); background: rgba(77,163,255,0.1); }
+    .chip.dq { text-decoration: line-through; opacity: 0.5; }
+    .panels {
+        flex: 1;
+        overflow: auto;
+        padding: 14px;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+        gap: 14px;
+        align-content: start;
+    }
+    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px; }
+    .panel h3 { margin: 0 0 8px; font-size: 12px; display: flex; justify-content: space-between; align-items: center; }
+    .panel h3 .score { color: var(--accent); font-family: Consolas, monospace; }
+    .panel canvas { display: block; background: #0e1016; border-radius: 4px; margin: 0 auto; max-width: 100%; }
+    .readout { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; font-size: 11px; margin-top: 8px; font-family: Consolas, monospace; }
+    .readout .label { color: var(--text-dim); font-family: -apple-system, sans-serif; }
+    .readout .live { color: var(--accent); }
+    .note { font-size: 10px; color: var(--text-dim); margin-top: 6px; }
+    .empty { display: flex; flex: 1; align-items: center; justify-content: center; color: var(--text-dim); font-size: 13px; text-align: center; padding: 40px; flex-direction: column; gap: 10px; }
+    .empty .drop { border: 2px dashed var(--border); border-radius: 10px; padding: 40px 60px; }
+    .empty .drop.drag { border-color: var(--accent); color: var(--accent); }
+    .legend { display: flex; gap: 12px; font-size: 11px; color: var(--text-dim); flex-wrap: wrap; padding: 0 16px 8px; }
+    .legend span { display: inline-flex; align-items: center; gap: 4px; }
+    .legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+
+    .doc-item { padding: 8px 10px; border-radius: 6px; cursor: pointer; font-size: 12px; margin-bottom: 2px; }
+    .doc-item:hover { background: var(--panel-alt); color: var(--accent); }
+    .info-btn {
+        border: 1px solid var(--border);
+        background: transparent;
+        color: var(--text-dim);
+        border-radius: 999px;
+        width: 18px;
+        height: 18px;
+        line-height: 1;
+        font-size: 11px;
+        cursor: pointer;
+        padding: 0;
+    }
+    .info-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .doc-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,0.6);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 100;
+        padding: 24px;
+    }
+    .doc-card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        width: min(680px, 100%);
+        max-height: 100%;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+    .doc-card-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 18px;
+        border-bottom: 1px solid var(--border);
+        flex-shrink: 0;
+    }
+    .doc-card-header h2 { margin: 0; font-size: 15px; }
+    .doc-card-body { padding: 6px 22px 22px; overflow-y: auto; font-size: 13px; line-height: 1.6; }
+    .doc-card-body h1 { font-size: 18px; margin: 14px 0 8px; }
+    .doc-card-body h2 { font-size: 14px; margin: 18px 0 6px; color: var(--accent); }
+    .doc-card-body p { margin: 8px 0; color: var(--text); }
+    .doc-card-body ul { margin: 8px 0; padding-left: 20px; }
+    .doc-card-body li { margin: 4px 0; }
+    .doc-card-body code { font-family: Consolas, monospace; background: var(--panel-alt); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+    .doc-card-close { background: transparent; border: none; color: var(--text-dim); font-size: 20px; cursor: pointer; line-height: 1; padding: 2px 6px; }
+    .doc-card-close:hover { color: var(--text); }
+</style>
+</head>
+<body>
+
+<header>
+    <h1>Ascii-Maze &mdash; Results Viewer</h1>
+    <div class="status mono" id="status">No data loaded.</div>
+    <label class="filebtn" for="fileInput">Open JSON&hellip;</label>
+    <input type="file" id="fileInput" accept=".json">
+</header>
+
+<div class="layout" id="layout">
+    <div class="empty" id="emptyState">
+        <div class="drop" id="dropZone">
+            Drop a <code>bench_results.json</code> or <code>maze_result.json</code> file here,<br>
+            or click &ldquo;Open JSON&hellip;&rdquo; above.<br><br>
+            <span style="font-size:11px">Generated by <code>maze.exe -bench</code> or a plain run &mdash; both write a JSON file next to <code>maze.exe</code>.</span>
+        </div>
+    </div>
+
+    <aside id="sidebar" style="display:none">
+        <div class="tabs">
+            <button id="tabMazesBtn" class="active">Mazes</button>
+            <button id="tabBoardBtn">Leaderboard</button>
+            <button id="tabDocsBtn">Algorithms</button>
+        </div>
+        <div class="tabpane" id="tabMazes"></div>
+        <div class="tabpane" id="tabBoard" style="display:none"></div>
+        <div class="tabpane" id="tabDocs" style="display:none"></div>
+    </aside>
+
+    <main id="mainArea" style="display:none">
+        <div class="controls">
+            <div class="group">
+                <button id="playBtn" class="primary">&#9654; Play</button>
+                <button id="resetBtn">&#8634; Reset</button>
+            </div>
+            <div class="group">
+                Duration
+                <input type="range" id="durationSlider" min="1" max="30" step="0.5" value="6">
+                <span id="durationLabel" class="mono">6.0s</span>
+            </div>
+            <div class="group">
+                Mode
+                <select id="modeSelect">
+                    <option value="proportional">Proportional speed (by span)</option>
+                    <option value="sync">Sync finish (compare routes)</option>
+                </select>
+            </div>
+        </div>
+        <div class="chips" id="algoChips"></div>
+        <div class="legend">
+            <span><i style="background:var(--start)"></i>Start</span>
+            <span><i style="background:var(--key)"></i>Key</span>
+            <span><i style="background:var(--exit)"></i>Exit</span>
+            <span><i style="background:var(--path)"></i>Path taken</span>
+            <span><i style="background:var(--trail)"></i>Search tree (grows in real discovery order)</span>
+            <span><i style="background:var(--visited)"></i>Dead end (a branch that didn't lead anywhere useful)</span>
+            <span>Teleporters share a color + letter per pair</span>
+        </div>
+        <div class="panels" id="panels"></div>
+    </main>
+</div>
+
+<div class="doc-overlay" id="docOverlay" style="display:none">
+    <div class="doc-card">
+        <div class="doc-card-header">
+            <h2 id="docCardTitle"></h2>
+            <button class="doc-card-close" id="docCardClose">&times;</button>
+        </div>
+        <div class="doc-card-body" id="docCardBody"></div>
+    </div>
+</div>
+
+<script>
+(function () {
+    'use strict';
+
+    // ---------- state ----------
+    var data = null;
+    var mazes = [];
+    var activeMazeIndex = 0;
+    var selectedAlgorithms = new Set();
+    var algorithmSelectionInitialized = false; // becomes true once a default selection has been picked, so switching mazes never silently overwrites the user's own choice of algorithms to compare
+    var playing = false;
+    var playStart = 0;      // performance.now() timestamp the current play began
+    var pausedAt = 0;       // ms of animation progress already consumed when paused
+    var rafHandle = null;
+    var panelState = [];    // per visible panel: {name, canvas, ctx, cellSize, pathCells, visitedOnly, result, maze}
+
+    var DIR = { north: 1, south: 2, east: 4, west: 8 };
+    var TP_COLORS = ['#ffb347', '#4dd0e1', '#ba68c8', '#81c784', '#f06292', '#9575cd', '#4fc3f7', '#dce775', '#ff8a65', '#a1887f'];
+
+    // ---------- algorithm docs ----------
+    // One short technical writeup per solver, in a deliberately tiny
+    // markdown subset (headers, bold, inline code, bullet lists,
+    // paragraphs) rendered by renderMarkdown below - no external
+    // dependency, since this whole page has to stay a single self-contained
+    // file. Keys match each solver's Name() exactly.
+    var ALGO_DOCS = {
+        'BFS': '# BFS\n\n**Category:** breadth-first search (uninformed, graph search)\n\nThe textbook reference implementation everything else gets judged against. BFS explores the maze in expanding rings: every cell one move away from the start, then every cell two moves away, and so on. It never revisits a cell, so the first time it reaches one, that\'s guaranteed to be via one of the shortest possible routes to it.\n\n## Why it\'s always optimal\n\nEvery move in this maze - including a forced teleport jump - costs exactly one step. Because BFS processes cells in strict distance order (a FIFO queue), the first time it reaches Key or Exit is provably via the fewest possible steps. No heuristic, no guessing.\n\n## How it\'s built here\n\nA plain `map[Cell]bool` tracks visited cells, and a `map[Cell]Cell` records which cell each one was first reached from. Once the destination is dequeued, the path is reconstructed by walking those parent pointers backward and reversing the result.\n\n## Teleporters\n\nStepping toward a teleporter tile resolves to its paired cell before that cell is ever marked visited - the trigger tile itself is never a "resting" cell, only ever a forced redirect.\n\n## Trade-off\n\nSimplicity and a hard optimality guarantee, at the cost of exploring far more cells than a goal-directed search like A-Star typically needs.',
+
+        'DFS': '# DFS\n\n**Category:** depth-first search (uninformed, graph search)\n\nDFS commits to one direction and follows it as deep as it can go before backtracking - the opposite exploration order from BFS. It\'s implemented with an explicit stack of `{cell, nextDirectionToTry}` frames rather than recursion, so it can\'t blow the call stack on a large maze.\n\n## Why it\'s usually not the shortest route\n\nDFS finds *a* path, not the *shortest* one. Once it commits to a direction it has no way to know a shorter route existed elsewhere until it\'s already gone deep down the wrong branch and had to backtrack out. On a maze with long corridors this can mean a route several times longer than optimal, even though every individual move was legal.\n\n## Backtracking\n\nWhen every direction from the top-of-stack cell has already been tried (wall, or already visited), that frame is popped and exploration continues from wherever it left off one level up - hit a dead end, go back to the last decision point, try something else.\n\n## Teleporters\n\nHandled like every other algorithm here: stepping toward one forces an immediate jump to its paired cell, which becomes the new top-of-stack cell.\n\n## Why it\'s in the competition\n\nAs the one entry with no optimality guarantee at all, DFS makes "how much worse than optimal" a visible, measured thing on the leaderboard instead of an assumption.',
+
+        'A-Star': '# A-Star\n\n**Category:** best-first search (informed / heuristic graph search)\n\nA-Star is BFS with a sense of direction: instead of a plain FIFO queue, it uses a priority queue ordered by steps-so-far plus estimated-steps-remaining, always expanding whichever cell currently looks most promising. The estimate is Manhattan (taxicab) distance to the target - the minimum moves a completely open grid would need.\n\n## Why it\'s usually fast\n\nOn an open, sparsely-walled maze, A-Star typically expands far fewer cells than plain BFS, because it keeps steering toward the goal instead of growing outward evenly in every direction.\n\n## Why it isn\'t *guaranteed* optimal here\n\nA-Star\'s optimality guarantee depends on the heuristic never overestimating the true remaining distance ("admissibility"). A teleporter breaks that: it can make the true remaining distance much shorter than straight-line Manhattan distance suggests, by cutting clean across the grid. In practice A-Star still finds the shortest route on most mazes here, but - unlike BFS and Claudette - it isn\'t formally guaranteed to on every teleporter layout.\n\n## Teleporters\n\nResolved the same way as everywhere else (forced redirect before a cost is assigned) - exactly what makes the heuristic occasionally overconfident.',
+
+        'Claudette': '# Claudette\n\n**Category:** breadth-first search, engineered for speed\n\nThe exact same algorithm as `BFS` - same guarantee of finding the shortest route, same move-by-move logic - rebuilt from the ground up to be fast rather than simple to read.\n\n## What\'s actually different\n\n- Cells are addressed by a flat integer index (`y*width+x`), not a `Cell` struct used as a map key - no hashing, no map bucket walk.\n- Visited/parent/teleport-partner state live in preallocated `int32` slices, indexed directly - O(1) with zero allocation in the hot loop.\n- "Visited" uses a generation stamp instead of clearing the array between the Start-to-Key and Key-to-Exit searches, so the second leg doesn\'t pay an O(n) reset cost.\n- The BFS frontier is a preallocated buffer sized once up front, not a slice that reallocates and copies as it grows.\n\nNone of this changes *what* gets found - it\'s still the shortest route via BFS - only how fast the search loop runs.\n\n## Why "Claudette"\n\nThe standing challenge for any new algorithm added to this project: beating Claudette on raw wall-clock time, since nothing can beat a guaranteed-shortest route on steps alone - only tie it.',
+
+        'Dijkstra': '# Dijkstra\n\n**Category:** priority-queue best-first search (informed by distance, not direction)\n\nDijkstra\'s algorithm always expands whichever known cell currently has the smallest cumulative distance from the start, using an explicit min-heap - no FIFO queue, and no heuristic steering it toward the goal at all (that\'s exactly what turns it into `A-Star`).\n\n## Why it matches BFS here\n\nEvery move in this maze costs exactly one step, including a forced teleport jump. With uniform edge weights, a min-heap keyed on distance-so-far ends up popping cells in exactly the same order a plain FIFO queue would - so Dijkstra is guaranteed optimal here for the same underlying reason `BFS` is, just arriving there through a heavier general-purpose mechanism (an explicit priority queue) instead of relying on a coincidence of uniform costs.\n\n## Why it exists next to BFS\n\nOn a maze with non-uniform move costs - some corridors costing more steps of "effort" than others, say - Dijkstra is the algorithm that would still find the true shortest route where plain BFS\'s FIFO-order assumption would quietly break. Here, with every move costing the same, it\'s the textbook general case standing next to BFS\'s textbook special case: same answer, different reason it\'s correct.\n\n## Teleporters\n\nResolved the same way as everywhere else - a forced redirect to the paired cell before a distance is assigned, with the edge recorded once a cell is finalized (popped), not on every relaxation.',
+
+        'BrenThread': '# BrenThread\n\n**Category:** concurrent flood-fill + breadth-first reconstruction\n\nBrenThread explores the maze with real goroutines instead of a single walker. One goroutine starts per direction from Start; every thread then behaves identically: look at every direction from its current cell, and for each one that\'s a legal move **and** wins a claim race against every other thread trying the same cell, spawn a brand new thread to continue from there. No direction is ever preferred over another - a thread that loses a claim race isn\'t wasted, either: it still genuinely found a legal edge to that cell, it just doesn\'t get to explore onward from it.\n\n## Finding shortcuts, not just a route\n\nA cell can only ever be *claimed* - and explored onward from - by whichever thread reaches it first. But many threads racing outward concurrently, with no synchronized notion of "how far have I actually gone", can easily claim a farther cell before a *shorter* route to it turns up through a different branch a moment later. Walking only the resulting claim tree could get permanently stuck with that longer route.\n\nSo every attempted move - win or lose the claim race - is recorded into a shared graph. Once every thread has finished, an ordinary single-threaded BFS walks the *complete* discovered graph to find the genuinely shortest Start-to-Key and Key-to-Exit routes. The concurrency is what discovers the maze\'s structure in parallel; the final BFS is what guarantees nothing that was discovered goes to waste.\n\n## Teleporters\n\nResolved by whichever thread is standing next to one, exactly like every other algorithm - the forced jump becomes part of the edge that thread records, so the final BFS can use it like any other move.',
+
+        'BrenThreadOptimized': '# BrenThreadOptimized\n\n**Category:** concurrent best-first search, NOT guaranteed optimal\n\nUnlike every other solver here, this one deliberately trades away the guaranteed-shortest-route guarantee for score - the same trade `A-Star` makes over `BFS`, just pushed much further. A small fixed pool of worker goroutines runs a concurrent best-first search per leg (Start→Key, then Key→Exit), pulling whichever claimed cell is currently closest (Manhattan distance) to that leg\'s destination off a shared bucket queue - the same heuristic `A-Star`\'s own priority is built on.\n\n## How a route gets built\n\nA cell is claimed exclusively with a single lock-free `atomic.CompareAndSwapInt32` - one claim per cell, ever - and whichever goroutine wins that claim records itself as the cell\'s parent. The instant a leg\'s destination is itself claimed, that leg stops immediately. The route is then just the parent chain walked straight back to the source - no separate reconstruction search runs afterward, unlike `HangeonOptimized` (which shares this solver\'s flat-graph plumbing but still reconstructs with an ordinary, guaranteed-optimal BFS over the complete graph).\n\n## The honest cost\n\nThis is NOT a small trade like `A-Star`\'s (which only degrades ~1.3% on average across this project\'s benchmark seeds). Measured directly: **~72% of runs come back suboptimal, with a worst case of well over a hundred extra steps.** Two things compound beyond plain Manhattan-distance inadmissibility near teleporters:\n\n- **No relaxation.** `A-Star` can re-point an already-discovered cell at a cheaper predecessor if a shorter route to it turns up later. A claim here is permanent the instant the CAS succeeds - whichever predecessor happens to win keeps the cell forever, even if a genuinely shorter route arrives a moment later.\n- **Concurrency breaks strict best-first order.** Several workers independently scanning the bucket queue at once means cells don\'t get claimed in strict priority order the way a single-threaded heap-pop would guarantee.\n\nThis was measured, flagged explicitly, and kept this way on purpose: for this solver specifically, score comes first and route quality second - not a bug, a deliberate, disclosed choice.\n\n## Teleporters\n\nResolved the same way as `HangeonOptimized`: any move into a teleporter\'s trigger tile is redirected straight to its paired cell before the search ever sees it as a distinct step - which is exactly what makes the Manhattan-distance heuristic unreliable near one, the same inadmissibility `A-Star` has.',
+
+        'Hangeon': '# Hangeon\n\n**Category:** graph BFS over a dungeon-crawler-style grid model\n\nHangeon deliberately models the maze the way a simple ASCII dungeon-crawler graph library would, rather than the bitmask-and-direction-constants style the rest of this codebase uses: a plain `Coordinate{Row, Col}`-keyed adjacency graph, walked by an ordinary breadth-first search. Same shortest-route guarantee as BFS - just a different mental model, and a genuinely different search tree shape on an identical maze.\n\n## The 2x-scaled grid\n\nThe maze is rendered at double resolution: one graph vertex for every real cell, plus one extra "gap" vertex on every open wall crossing between two adjacent cells. Crossing a wall opening is two graph hops, not an abstract "is this direction open" bit - closer to how a real dungeon\'s ASCII map would be parsed character-by-character into a graph, where every traversable character becomes its own vertex. Paths, visited sets, and search-tree edges are all filtered back down to real cells for display, transparently collapsing any gap hops in between.\n\n## Teleporters\n\nFolded straight into the graph at construction time: any edge whose destination is a teleporter\'s trigger tile is rewired to point at its paired tile instead - "stepping toward a teleporter forces you to its partner." An edge *leaving* a trigger is never touched by this rule (its destination is an ordinary gap, never a trigger), so once the search has arrived at a trigger - forced there, never walked into directly - it explores onward completely normally. The traversal itself needs no teleporter-specific logic at all.',
+
+        'HangeonOptimized': '# HangeonOptimized\n\n**Category:** graph BFS over a dungeon-crawler-style grid model, direct build\n\nThe same `Coordinate`/graph model and the same plain breadth-first search as `Hangeon` - just without the 2x-scaled grid. One graph vertex per logical maze cell, wired directly from the maze\'s own wall data, with no "gap" vertices in between.\n\n## Why this is faster\n\nRoughly 4x fewer nodes to visit than plain Hangeon\'s 2x-scaled grid (no gap vertices at all), and no text-grid round trip needed to build the graph.\n\n## Teleporters\n\nThe redirect rule collapses to its simplest form here: a cell\'s edge either points at an ordinary neighbor, or - if that neighbor is a teleporter\'s trigger tile - straight at its paired cell. One hop, unambiguous, since there\'s no gap vertex in between to redirect through in the first place.'
+    };
+
+    // renderMarkdown converts the tiny subset of markdown ALGO_DOCS actually
+    // uses (# / ## headers, **bold**, `inline code`, "- " bullet lists,
+    // blank-line-separated paragraphs) into HTML. Deliberately minimal -
+    // this page has no external dependencies to lean on, and the docs
+    // above never use anything beyond this subset.
+    function renderMarkdown(md) {
+        function inline(text) {
+            text = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
+            text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+            text = text.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+            return text;
+        }
+        var html = '';
+        var inList = false;
+        function closeList() { if (inList) { html += '</ul>'; inList = false; } }
+        md.split('\n').forEach(function (line) {
+            var h = line.match(/^(#{1,3})\s+(.*)/);
+            if (h) {
+                closeList();
+                var level = h[1].length;
+                html += '<h' + level + '>' + inline(h[2]) + '</h' + level + '>';
+                return;
+            }
+            var li = line.match(/^-\s+(.*)/);
+            if (li) {
+                if (!inList) { html += '<ul>'; inList = true; }
+                html += '<li>' + inline(li[1]) + '</li>';
+                return;
+            }
+            closeList();
+            if (line.trim() === '') return;
+            html += '<p>' + inline(line) + '</p>';
+        });
+        closeList();
+        return html;
+    }
+
+    var docOverlay = document.getElementById('docOverlay');
+    function openDoc(name) {
+        var md = ALGO_DOCS[name];
+        document.getElementById('docCardTitle').textContent = name;
+        document.getElementById('docCardBody').innerHTML = md ? renderMarkdown(md) : '<p>No writeup for this algorithm yet.</p>';
+        docOverlay.style.display = 'flex';
+    }
+    function closeDoc() { docOverlay.style.display = 'none'; }
+    document.getElementById('docCardClose').addEventListener('click', closeDoc);
+    docOverlay.addEventListener('click', function (e) { if (e.target === docOverlay) closeDoc(); });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeDoc(); });
+
+    function renderDocsList() {
+        var el = document.getElementById('tabDocs');
+        el.innerHTML = '';
+        Object.keys(ALGO_DOCS).forEach(function (name) {
+            var div = document.createElement('div');
+            div.className = 'doc-item';
+            div.textContent = name;
+            div.addEventListener('click', function () { openDoc(name); });
+            el.appendChild(div);
+        });
+    }
+
+    // ---------- loading ----------
+    var fileInput = document.getElementById('fileInput');
+    var dropZone = document.getElementById('dropZone');
+    var status = document.getElementById('status');
+
+    fileInput.addEventListener('change', function (e) {
+        if (e.target.files && e.target.files[0]) readFile(e.target.files[0]);
+    });
+    ['dragenter', 'dragover'].forEach(function (evt) {
+        document.body.addEventListener(evt, function (e) { e.preventDefault(); dropZone.classList.add('drag'); });
+    });
+    ['dragleave', 'drop'].forEach(function (evt) {
+        document.body.addEventListener(evt, function (e) { e.preventDefault(); dropZone.classList.remove('drag'); });
+    });
+    document.body.addEventListener('drop', function (e) {
+        e.preventDefault();
+        var f = e.dataTransfer.files && e.dataTransfer.files[0];
+        if (f) readFile(f);
+    });
+
+    function readFile(file) {
+        status.textContent = 'Loading ' + file.name + '...';
+        var reader = new FileReader();
+        reader.onload = function () {
+            try {
+                var parsed = JSON.parse(reader.result);
+                loadData(parsed, file.name);
+            } catch (err) {
+                status.textContent = 'Failed to parse ' + file.name + ': ' + err.message;
+            }
+        };
+        reader.onerror = function () { status.textContent = 'Failed to read ' + file.name; };
+        reader.readAsText(file);
+    }
+
+    function loadData(parsed, filename) {
+        if (!parsed || !Array.isArray(parsed.mazes) || parsed.mazes.length === 0) {
+            status.textContent = filename + ': no mazes found in file.';
+            return;
+        }
+        if (parsed.formatVersion !== 4) {
+            status.textContent = filename + ': unrecognized formatVersion ' + parsed.formatVersion + ' (viewer expects 4) - reload after rebuilding maze.exe.';
+        }
+        data = parsed;
+        mazes = parsed.mazes;
+        activeMazeIndex = 0;
+        algorithmSelectionInitialized = false; // fresh file -> pick a sensible default again, don't carry over an unrelated file's selection
+        DIR = parsed.directionBits || DIR;
+        status.textContent = filename + ' - ' + mazes.length + ' maze(s), generated ' + (parsed.generatedAt || 'unknown time');
+
+        document.getElementById('emptyState').style.display = 'none';
+        document.getElementById('sidebar').style.display = 'flex';
+        document.getElementById('mainArea').style.display = 'flex';
+
+        renderMazeList();
+        renderLeaderboard();
+        renderDocsList();
+        selectMaze(0);
+    }
+
+    // ---------- sidebar: maze list ----------
+    function renderMazeList() {
+        var el = document.getElementById('tabMazes');
+        el.innerHTML = '';
+        mazes.forEach(function (m, i) {
+            var div = document.createElement('div');
+            div.className = 'maze-item' + (i === activeMazeIndex ? ' active' : '');
+            div.innerHTML = '<div>seed=' + m.seed + '</div><div class="style">' + m.style + ' &middot; ' + m.width + '&times;' + m.height + ' &middot; ' + m.results.length + ' algos</div>';
+            div.addEventListener('click', function () { selectMaze(i); });
+            el.appendChild(div);
+        });
+    }
+
+    function formatBytes(b) {
+        if (b < 1024) return b.toFixed(0) + 'B';
+        if (b < 1024 * 1024) return (b / 1024).toFixed(2) + 'KB';
+        return (b / (1024 * 1024)).toFixed(2) + 'MB';
+    }
+
+    // ---------- sidebar: leaderboard / per-maze table ----------
+    var boardSort = { key: 'avgScore', asc: true };
+
+    function renderLeaderboard() {
+        var el = document.getElementById('tabBoard');
+        var rows, cols;
+        if (data.leaderboard && data.leaderboard.length) {
+            cols = [
+                { key: 'algorithm', label: 'Algo' },
+                { key: 'avgScore', label: 'Score', fmt: function (v) { return v.toFixed(2); } },
+                { key: 'avgSteps', label: 'Steps', fmt: function (v) { return v.toFixed(1); } },
+                { key: 'avgSpan', label: 'Span', fmt: function (v) { return v.toFixed(1); } },
+                { key: 'avgAllocs', label: 'Allocs', fmt: function (v) { return v.toFixed(1); } },
+                { key: 'avgMemBytes', label: 'Mem', fmt: formatBytes },
+                { key: 'avgOps', label: 'Ops¹', fmt: function (v) { return v.toFixed(1); } },
+                { key: 'wins', label: 'Wins' }
+            ];
+            rows = data.leaderboard.slice();
+        } else {
+            cols = [
+                { key: 'algorithm', label: 'Algo' },
+                { key: 'score', label: 'Score', fmt: function (v) { return v ? v.toFixed(2) : '-'; } },
+                { key: 'steps', label: 'Steps' },
+                { key: 'spanCount', label: 'Span' },
+                { key: 'allocsCount', label: 'Allocs' },
+                { key: 'memBytes', label: 'Mem', fmt: formatBytes },
+                { key: 'opsCount', label: 'Ops¹' }
+            ];
+            rows = mazes[activeMazeIndex].results.slice();
+        }
+        rows.sort(function (a, b) {
+            var av = a[boardSort.key], bv = b[boardSort.key];
+            if (typeof av === 'string') return boardSort.asc ? av.localeCompare(bv) : bv.localeCompare(av);
+            return boardSort.asc ? av - bv : bv - av;
+        });
+
+        var html = '<table><thead><tr>';
+        cols.forEach(function (c) { html += '<th data-key="' + c.key + '">' + c.label + '</th>'; });
+        html += '</tr></thead><tbody>';
+        rows.forEach(function (r) {
+            var dq = r.valid === false;
+            html += '<tr class="' + (selectedAlgorithms.has(r.algorithm || r.name) ? 'hl ' : '') + (dq ? 'dq' : '') + '">';
+            cols.forEach(function (c) {
+                var v = r[c.key];
+                html += '<td>' + (dq && c.key !== 'algorithm' ? (c.key === 'algorithm' ? v : '&mdash;') : (c.fmt ? c.fmt(v) : v)) + '</td>';
+            });
+            html += '</tr>';
+        });
+        html += '</tbody></table>';
+        html += '<p class="note">Score = geometric mean of Steps/Span/Allocs/Mem, each ratioed against the best algorithm in that dimension on that maze. All four are deterministic - the same maze solved by the same algorithm produces the exact same numbers on any machine, every run - which is why wall-clock time and CPU time aren\'t shown here at all: they depend on how busy the machine running the benchmark happens to be. Span is critical-path length (the longest chain of discoveries that had to happen strictly in sequence) rather than total work, so a solver that genuinely splits work across threads is credited for it instead of penalized for "doing more total operations." ¹Ops (total discoveries made, informational) is shown for context but isn\'t part of Score - Span already covers what a plain discovery count would double-count for a concurrent solver.</p>';
+        el.innerHTML = html;
+        el.querySelectorAll('th').forEach(function (th) {
+            th.addEventListener('click', function () {
+                var key = th.getAttribute('data-key');
+                boardSort.asc = (boardSort.key === key) ? !boardSort.asc : true;
+                boardSort.key = key;
+                renderLeaderboard();
+            });
+        });
+    }
+
+    document.getElementById('tabMazesBtn').addEventListener('click', function () { switchTab('Mazes'); });
+    document.getElementById('tabBoardBtn').addEventListener('click', function () { switchTab('Board'); });
+    document.getElementById('tabDocsBtn').addEventListener('click', function () { switchTab('Docs'); });
+    function switchTab(which) {
+        document.getElementById('tabMazesBtn').classList.toggle('active', which === 'Mazes');
+        document.getElementById('tabBoardBtn').classList.toggle('active', which === 'Board');
+        document.getElementById('tabDocsBtn').classList.toggle('active', which === 'Docs');
+        document.getElementById('tabMazes').style.display = which === 'Mazes' ? '' : 'none';
+        document.getElementById('tabBoard').style.display = which === 'Board' ? '' : 'none';
+        document.getElementById('tabDocs').style.display = which === 'Docs' ? '' : 'none';
+    }
+
+    // ---------- maze selection & algorithm chips ----------
+    function selectMaze(i) {
+        activeMazeIndex = i;
+        renderMazeList();
+        var maze = mazes[i];
+        // Only pick a default selection once, the first time a maze loads.
+        // Switching mazes after that keeps whatever algorithms the user
+        // has chosen to compare - re-defaulting to "every valid algorithm"
+        // on every switch was silently throwing away a deliberate choice
+        // every time you moved to the next map.
+        if (!algorithmSelectionInitialized) {
+            selectedAlgorithms = new Set(maze.results.filter(function (r) { return r.valid; }).map(function (r) { return r.algorithm; }));
+            algorithmSelectionInitialized = true;
+        }
+        renderChips();
+        renderLeaderboard();
+        refreshPanelsPreservingPlayback();
+    }
+
+    // refreshPanelsPreservingPlayback rebuilds the panel set (new maze,
+    // new algorithm selection, whatever changed) without resetting
+    // playback state the user didn't touch: if an animation is running, it
+    // keeps running - just retimed so the new panels start their reveal
+    // from the beginning instead of jumping straight to "finished" - and
+    // if nothing was playing, the new panels are shown already solved
+    // (progress 1) rather than blank, since a blank grid on every map
+    // switch reads as "it reset" even though nothing is actually wrong.
+    function refreshPanelsPreservingPlayback() {
+        if (playing) {
+            playStart = performance.now();
+        } else {
+            stopAnimation();
+        }
+        buildPanels();
+    }
+
+    function renderChips() {
+        var maze = mazes[activeMazeIndex];
+        var el = document.getElementById('algoChips');
+        el.innerHTML = '';
+        maze.results.forEach(function (r) {
+            var chip = document.createElement('div');
+            chip.className = 'chip' + (selectedAlgorithms.has(r.algorithm) ? ' on' : '') + (!r.valid ? ' dq' : '');
+            chip.textContent = r.algorithm + (r.valid ? '' : ' (disqualified)');
+            chip.title = r.valid ? '' : r.invalidReason;
+            chip.addEventListener('click', function () {
+                if (!r.valid) return;
+                if (selectedAlgorithms.has(r.algorithm)) selectedAlgorithms.delete(r.algorithm);
+                else selectedAlgorithms.add(r.algorithm);
+                renderChips();
+                renderLeaderboard();
+                refreshPanelsPreservingPlayback();
+            });
+            el.appendChild(chip);
+        });
+    }
+
+    // ---------- panel construction ----------
+    function buildPanels() {
+        var maze = mazes[activeMazeIndex];
+        var container = document.getElementById('panels');
+        container.innerHTML = '';
+        panelState = [];
+
+        var chosen = maze.results.filter(function (r) { return r.valid && selectedAlgorithms.has(r.algorithm); });
+        chosen.sort(function (a, b) { return (a.score || Infinity) - (b.score || Infinity); });
+        chosen.forEach(function (r) {
+            var wrap = document.createElement('div');
+            wrap.className = 'panel';
+
+            var title = document.createElement('h3');
+            title.innerHTML = '<span>' + r.algorithm + ' <button class="info-btn" title="What is ' + r.algorithm + ' doing?">i</button></span><span class="score mono">' + (r.score ? 'score ' + r.score.toFixed(2) : '') + '</span>';
+            title.querySelector('.info-btn').addEventListener('click', function () { openDoc(r.algorithm); });
+            wrap.appendChild(title);
+
+            var cellSize = Math.max(4, Math.min(20, Math.floor(300 / Math.max(maze.width, maze.height))));
+            var canvas = document.createElement('canvas');
+            canvas.width = maze.width * cellSize;
+            canvas.height = maze.height * cellSize;
+            wrap.appendChild(canvas);
+
+            var readout = document.createElement('div');
+            readout.className = 'readout mono';
+            wrap.appendChild(readout);
+
+            var note = document.createElement('div');
+            note.className = 'note';
+            note.textContent = 'Score is computed from steps/span/allocs/mem - deterministic, same every run on any machine. Span is critical-path length, not total work, so a solver that genuinely splits work across threads gets credit for it. Wall-clock and CPU time aren\'t shown at all, since they depend on how busy this machine happens to be right now.';
+            wrap.appendChild(note);
+
+            container.appendChild(wrap);
+
+            var pathSet = new Set(r.path.map(function (c) { return c.x + ',' + c.y; }));
+
+            // waves[i] is edge i's reveal generation: its real Depth for a
+            // solver that reports one (so several edges sharing a Depth -
+            // genuinely found at the same time by different threads - are
+            // revealed together, all at once), or just its own array
+            // position for a solver that doesn't (every edge its own
+            // generation, i.e. today's one-at-a-time reveal in discovery
+            // order, unchanged).
+            var edges = r.edges || [];
+            var waves = edges.map(function (e, i) { return e.depth || (i + 1); });
+            var maxWave = waves.length ? Math.max.apply(null, waves) : 1;
+
+            var st = {
+                result: r,
+                maze: maze,
+                canvas: canvas,
+                ctx: canvas.getContext('2d'),
+                cellSize: cellSize,
+                pathCells: r.path,
+                edges: edges,
+                waves: waves,
+                maxWave: maxWave,
+                pathSet: pathSet,
+                readoutEl: readout
+            };
+            panelState.push(st);
+            // Not currently playing -> show this panel already solved
+            // rather than blank (see refreshPanelsPreservingPlayback);
+            // playing -> start at 0 and let the running tick() loop take
+            // over on its next frame.
+            drawPanel(st, playing ? 0 : 1);
+        });
+
+        if (chosen.length === 0) {
+            container.innerHTML = '<div class="empty" style="grid-column:1/-1">No valid algorithm selected for this maze.</div>';
+        }
+    }
+
+    // ---------- drawing ----------
+    function drawStatic(st) {
+        var ctx = st.ctx, cs = st.cellSize, maze = st.maze;
+        ctx.clearRect(0, 0, st.canvas.width, st.canvas.height);
+        ctx.fillStyle = '#0e1016';
+        ctx.fillRect(0, 0, st.canvas.width, st.canvas.height);
+
+        var tpColor = {};
+        (maze.teleporters || []).forEach(function (t, i) {
+            var color = TP_COLORS[i % TP_COLORS.length];
+            tpColor[t.from.x + ',' + t.from.y] = { color: color, label: t.label };
+            tpColor[t.to.x + ',' + t.to.y] = { color: color, label: t.label };
+        });
+
+        for (var y = 0; y < maze.height; y++) {
+            for (var x = 0; x < maze.width; x++) {
+                var mask = maze.openMask[y * maze.width + x];
+                var px = x * cs, py = y * cs;
+                var tp = tpColor[x + ',' + y];
+                if (tp) {
+                    ctx.fillStyle = tp.color + '55';
+                    ctx.fillRect(px, py, cs, cs);
+                    if (cs >= 9) {
+                        ctx.fillStyle = tp.color;
+                        ctx.font = Math.max(7, cs - 5) + 'px Consolas, monospace';
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        ctx.fillText(tp.label, px + cs / 2, py + cs / 2);
+                    }
+                }
+                ctx.strokeStyle = getCssVar('--wall');
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                if (!(mask & DIR.north)) { ctx.moveTo(px, py); ctx.lineTo(px + cs, py); }
+                if (!(mask & DIR.south)) { ctx.moveTo(px, py + cs); ctx.lineTo(px + cs, py + cs); }
+                if (!(mask & DIR.east)) { ctx.moveTo(px + cs, py); ctx.lineTo(px + cs, py + cs); }
+                if (!(mask & DIR.west)) { ctx.moveTo(px, py); ctx.lineTo(px, py + cs); }
+                ctx.stroke();
+            }
+        }
+
+        drawMarker(ctx, maze.start, cs, getCssVar('--start'), 'S');
+        drawMarker(ctx, maze.key, cs, getCssVar('--key'), 'K');
+        drawMarker(ctx, maze.exit, cs, getCssVar('--exit'), 'E');
+    }
+
+    function drawMarker(ctx, cell, cs, color, letter) {
+        var px = cell.x * cs, py = cell.y * cs;
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(px + cs / 2, py + cs / 2, Math.max(2, cs / 2 - 1.5), 0, Math.PI * 2);
+        ctx.fill();
+        if (cs >= 10) {
+            ctx.fillStyle = '#0a0d14';
+            ctx.font = 'bold ' + Math.max(7, cs - 6) + 'px Consolas, monospace';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(letter, px + cs / 2, py + cs / 2);
+        }
+    }
+
+    function drawPanel(st, progress) {
+        drawStatic(st);
+        var ctx = st.ctx, cs = st.cellSize;
+        var totalEdges = st.edges.length, totalPath = st.pathCells.length;
+        var explorationFraction = (totalEdges + totalPath) > 0 ? totalEdges / (totalEdges + totalPath) : 0;
+
+        // waveShown is how far into the generation timeline this frame has
+        // reached, not an edge count - an edge is visible once its own
+        // wave (see waves, above) is at or below this. Several edges can
+        // share a wave, so this is what actually lets a genuinely
+        // concurrent solver's simultaneous discoveries pop in together as
+        // one moment instead of a forced single-file reveal.
+        var waveShown, pathShown;
+        if (progress <= explorationFraction && explorationFraction > 0) {
+            waveShown = (progress / explorationFraction) * st.maxWave;
+            pathShown = 0;
+        } else {
+            waveShown = st.maxWave;
+            var pf = explorationFraction < 1 ? (progress - explorationFraction) / (1 - explorationFraction) : 1;
+            pathShown = Math.floor(pf * totalPath);
+        }
+        if (progress >= 1) { waveShown = st.maxWave; pathShown = totalPath; }
+
+        // The search tree, in the algorithm's real discovery order: each
+        // edge is its own short segment from the cell the search was
+        // standing on to the cell it just reached - not one continuous
+        // wandering line - so a fan-out (several branches opening from the
+        // same cell) and a jump back to an earlier branch point after a
+        // dead end both read as what they are, instead of getting smeared
+        // into a single trail.
+        var edgesShown = 0;
+        if (totalEdges > 0) {
+            ctx.strokeStyle = getCssVar('--trail');
+            ctx.lineWidth = Math.max(1, cs * 0.12);
+            ctx.lineCap = 'round';
+            ctx.globalAlpha = 0.75;
+            ctx.beginPath();
+            for (var i = 0; i < totalEdges; i++) {
+                if (st.waves[i] > waveShown) continue;
+                edgesShown++;
+                var e = st.edges[i];
+                var fx = e.from.x * cs + cs / 2, fy = e.from.y * cs + cs / 2;
+                var tx = e.to.x * cs + cs / 2, ty = e.to.y * cs + cs / 2;
+                ctx.moveTo(fx, fy);
+                ctx.lineTo(tx, ty);
+            }
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+
+            // Small dot at each branch tip that never led anywhere useful -
+            // a low-key "dead end" marker, not the dominant visual the old
+            // full-cell red squares were.
+            ctx.fillStyle = getCssVar('--visited');
+            for (var j = 0; j < totalEdges; j++) {
+                if (st.waves[j] > waveShown) continue;
+                var to = st.edges[j].to;
+                if (st.pathSet.has(to.x + ',' + to.y)) continue;
+                var dx = to.x * cs + cs / 2, dy = to.y * cs + cs / 2;
+                ctx.beginPath();
+                ctx.arc(dx, dy, Math.max(1, cs * 0.14), 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+        // Path drawn as a connected line so it reads as "the route", not scattered dots.
+        ctx.strokeStyle = getCssVar('--path');
+        ctx.lineWidth = Math.max(2, cs * 0.28);
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.beginPath();
+        for (var p = 0; p < pathShown; p++) {
+            var c = st.pathCells[p];
+            var cx = c.x * cs + cs / 2, cy = c.y * cs + cs / 2;
+            if (p === 0) ctx.moveTo(cx, cy); else ctx.lineTo(cx, cy);
+        }
+        ctx.stroke();
+
+        updateReadout(st, progress, edgesShown, pathShown);
+    }
+
+    function updateReadout(st, progress, edgesShown, pathShown) {
+        var r = st.result;
+        var liveSteps = Math.max(0, pathShown - 1);
+        var html = '';
+        html += '<div class="label">Steps</div><div class="live">' + liveSteps + ' / ' + r.steps + '</div>';
+        html += '<div class="label">Span</div><div class="live">' + (r.spanCount != null ? r.spanCount : '&mdash;') + '</div>';
+        html += '<div class="label">Allocs</div><div class="live">' + (r.allocsCount != null ? r.allocsCount : '&mdash;') + '</div>';
+        html += '<div class="label">Mem</div><div class="live">' + formatBytes(r.memBytes) + '</div>';
+        html += '<div class="label">Tree edges (ops, info)</div><div class="live">' + edgesShown + ' / ' + st.edges.length + '</div>';
+        html += '<div class="label">Score</div><div class="live">' + (r.score ? r.score.toFixed(2) : '&mdash;') + '</div>';
+        st.readoutEl.innerHTML = html;
+    }
+
+    function getCssVar(name) {
+        return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    }
+
+    // ---------- animation loop ----------
+    var playBtn = document.getElementById('playBtn');
+    var resetBtn = document.getElementById('resetBtn');
+    var durationSlider = document.getElementById('durationSlider');
+    var durationLabel = document.getElementById('durationLabel');
+    var modeSelect = document.getElementById('modeSelect');
+
+    durationSlider.addEventListener('input', function () {
+        durationLabel.textContent = parseFloat(durationSlider.value).toFixed(1) + 's';
+    });
+    modeSelect.addEventListener('change', function () {
+        // Mode change alters per-panel timing; restart cleanly rather than
+        // jumping to a confusing intermediate state.
+        stopAnimation();
+        panelState.forEach(function (st) { drawPanel(st, 0); });
+    });
+
+    playBtn.addEventListener('click', function () {
+        if (playing) { pauseAnimation(); } else { startAnimation(); }
+    });
+    resetBtn.addEventListener('click', function () {
+        stopAnimation();
+        panelState.forEach(function (st) { drawPanel(st, 0); });
+    });
+
+    function startAnimation() {
+        if (panelState.length === 0) return;
+        playing = true;
+        playBtn.innerHTML = '&#10074;&#10074; Pause';
+        playStart = performance.now() - pausedAt;
+        tick();
+    }
+    function pauseAnimation() {
+        playing = false;
+        playBtn.innerHTML = '&#9654; Play';
+        pausedAt = performance.now() - playStart;
+        if (rafHandle) cancelAnimationFrame(rafHandle);
+    }
+    function stopAnimation() {
+        playing = false;
+        pausedAt = 0;
+        playBtn.innerHTML = '&#9654; Play';
+        if (rafHandle) cancelAnimationFrame(rafHandle);
+    }
+
+    function tick() {
+        if (!playing) return;
+        var elapsed = performance.now() - playStart;
+        var durationMs = parseFloat(durationSlider.value) * 1000;
+        var mode = modeSelect.value;
+
+        // "Proportional" paces each panel by span (critical-path length) -
+        // deterministic, the same on any machine, and fair to a
+        // concurrent solver (a search split across threads finishes its
+        // animation sooner than one doing the identical total work
+        // single-threaded, matching what its Score already rewards it
+        // for) - rather than wall-clock time, which was measured on
+        // whatever machine ran the benchmark and would make the animation
+        // itself both non-reproducible and unfair to real parallelism.
+        var maxSpan = 1;
+        if (mode === 'proportional') {
+            panelState.forEach(function (st) { maxSpan = Math.max(maxSpan, st.result.spanCount || st.edges.length); });
+        }
+
+        var allDone = true;
+        panelState.forEach(function (st) {
+            var span = st.result.spanCount || st.edges.length;
+            var panelDurationMs = mode === 'proportional' ? durationMs * (span / maxSpan) : durationMs;
+            panelDurationMs = Math.max(panelDurationMs, 1);
+            var progress = Math.min(1, elapsed / panelDurationMs);
+            if (progress < 1) allDone = false;
+            drawPanel(st, progress);
+        });
+
+        if (allDone) { playing = false; playBtn.innerHTML = '&#9654; Play'; return; }
+        rafHandle = requestAnimationFrame(tick);
+    }
+})();
+</script>
+</body>
+</html>

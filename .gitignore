@@ -1,0 +1,14 @@
+*.exe
+*.test
+/dist/
+
+# local tooling state, not part of the project
+/.claude/
+/.claude-flow/
+
+# scratch working files
+/scratch_docs/
+
+# generated benchmark/run output - regenerate with `./maze.exe -bench` or a plain run
+/bench_results.json
+/maze_result.json
