@@ -19,6 +19,7 @@
         --start: #ffd166;
         --key: #b48cff;
         --exit: #4da3ff;
+        --teleport-line: #ffd60a;
         --good: #33d17a;
         --bad: #ff5c5c;
         font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
@@ -265,6 +266,7 @@
             <span><i style="background:var(--path)"></i>Path taken</span>
             <span><i style="background:var(--trail)"></i>Search tree (grows in real discovery order)</span>
             <span><i style="background:var(--visited)"></i>Dead end (a branch that didn't lead anywhere useful)</span>
+            <span><i style="background:var(--teleport-line)"></i>Teleport jump (dotted)</span>
             <span>Teleporters share a color + letter per pair</span>
         </div>
         <div class="panels" id="panels"></div>
@@ -407,6 +409,33 @@
         var f = e.dataTransfer.files && e.dataTransfer.files[0];
         if (f) readFile(f);
     });
+
+    // This viewer is meant to sit right next to the JSON file maze.exe just
+    // wrote (bench_results.json for -bench, maze_result.json otherwise), so
+    // try loading one automatically before ever falling back to a manual
+    // drop/open - there's always exactly one relevant file, and requiring a
+    // manual step every single time is pure friction. Only falls back to
+    // the drop-zone/"Open JSON..." UI if neither fetch succeeds - most
+    // commonly because the page was opened directly as a file:// URL, where
+    // a browser's same-origin policy typically blocks fetch() against local
+    // files entirely (this works whenever the page is served over
+    // http/https, including a plain local dev server), or because neither
+    // file exists next to viewer.html yet.
+    (function autoLoad() {
+        var candidates = ['bench_results.json', 'maze_result.json'];
+        function tryNext(i) {
+            if (i >= candidates.length) return; // nothing loaded - leave the manual UI as-is
+            fetch(candidates[i]).then(function (res) {
+                if (!res.ok) throw new Error('not found');
+                return res.json();
+            }).then(function (parsed) {
+                loadData(parsed, candidates[i]);
+            }).catch(function () {
+                tryNext(i + 1);
+            });
+        }
+        tryNext(0);
+    })();
 
     function readFile(file) {
         status.textContent = 'Loading ' + file.name + '...';
@@ -604,6 +633,22 @@
         container.innerHTML = '';
         panelState = [];
 
+        // tpPartner maps a teleporter cell to its paired cell (both
+        // directions), same shape as the Go side's own TeleportLookup - so
+        // a rendered edge/path segment landing on a registered teleporter
+        // cell can be recognized as a forced jump, and the *actual* trigger
+        // cell it was redirected from recovered for drawing (see drawPanel:
+        // Path/Edges never contain the trigger cell itself, only the
+        // resolved landing cell, so without this a teleport hop would
+        // render as one straight line from wherever the search stood
+        // *before* the trigger, skipping the trigger's own position
+        // entirely instead of visibly jumping from it).
+        var tpPartner = {};
+        (maze.teleporters || []).forEach(function (t) {
+            tpPartner[t.from.x + ',' + t.from.y] = t.to;
+            tpPartner[t.to.x + ',' + t.to.y] = t.from;
+        });
+
         var chosen = maze.results.filter(function (r) { return r.valid && selectedAlgorithms.has(r.algorithm); });
         chosen.sort(function (a, b) { return (a.score || Infinity) - (b.score || Infinity); });
         chosen.forEach(function (r) {
@@ -656,6 +701,7 @@
                 waves: waves,
                 maxWave: maxWave,
                 pathSet: pathSet,
+                tpPartner: tpPartner,
                 readoutEl: readout
             };
             panelState.push(st);
@@ -762,24 +808,51 @@
         // same cell) and a jump back to an earlier branch point after a
         // dead end both read as what they are, instead of getting smeared
         // into a single trail.
+        //
+        // An edge landing on a registered teleporter cell is a forced jump
+        // - Edge.To is already the *resolved* landing cell, never the
+        // trigger cell actually stepped onto (see Solution.Edges in
+        // solver.go), so a plain e.from->e.to line skips clean over the
+        // trigger's own position, making the jump look like it started
+        // from wherever the search stood one step *before* the teleporter
+        // rather than the teleporter itself. Splitting it into an ordinary
+        // sub-segment up to the trigger cell (tpPartner[e.to], the other
+        // half of the same pair) plus a separate dotted jump from there to
+        // e.to fixes that - see tpPartner's own doc comment in buildPanels.
         var edgesShown = 0;
         if (totalEdges > 0) {
             ctx.strokeStyle = getCssVar('--trail');
             ctx.lineWidth = Math.max(1, cs * 0.12);
             ctx.lineCap = 'round';
             ctx.globalAlpha = 0.75;
+            ctx.setLineDash([]);
             ctx.beginPath();
+            var teleportEdgeSegs = [];
             for (var i = 0; i < totalEdges; i++) {
                 if (st.waves[i] > waveShown) continue;
                 edgesShown++;
                 var e = st.edges[i];
+                var trigger = st.tpPartner[e.to.x + ',' + e.to.y];
+                var toPoint = trigger || e.to;
                 var fx = e.from.x * cs + cs / 2, fy = e.from.y * cs + cs / 2;
-                var tx = e.to.x * cs + cs / 2, ty = e.to.y * cs + cs / 2;
+                var tx = toPoint.x * cs + cs / 2, ty = toPoint.y * cs + cs / 2;
                 ctx.moveTo(fx, fy);
                 ctx.lineTo(tx, ty);
+                if (trigger) {
+                    teleportEdgeSegs.push([tx, ty, e.to.x * cs + cs / 2, e.to.y * cs + cs / 2]);
+                }
             }
             ctx.stroke();
             ctx.globalAlpha = 1;
+
+            if (teleportEdgeSegs.length) {
+                ctx.strokeStyle = getCssVar('--teleport-line');
+                ctx.setLineDash([Math.max(2, cs * 0.18), Math.max(2, cs * 0.18)]);
+                ctx.beginPath();
+                teleportEdgeSegs.forEach(function (s) { ctx.moveTo(s[0], s[1]); ctx.lineTo(s[2], s[3]); });
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
 
             // Small dot at each branch tip that never led anywhere useful -
             // a low-key "dead end" marker, not the dominant visual the old
@@ -795,18 +868,46 @@
                 ctx.fill();
             }
         }
-        // Path drawn as a connected line so it reads as "the route", not scattered dots.
+        // Path drawn as a connected line so it reads as "the route", not
+        // scattered dots - with the same teleport-hop split as the search
+        // tree above: a step landing on a teleporter cell breaks the solid
+        // line at the actual trigger cell and continues it as a separate
+        // dotted jump, then resumes the solid line from the landing cell.
         ctx.strokeStyle = getCssVar('--path');
         ctx.lineWidth = Math.max(2, cs * 0.28);
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
+        ctx.setLineDash([]);
         ctx.beginPath();
+        var teleportPathSegs = [];
         for (var p = 0; p < pathShown; p++) {
             var c = st.pathCells[p];
             var cx = c.x * cs + cs / 2, cy = c.y * cs + cs / 2;
-            if (p === 0) ctx.moveTo(cx, cy); else ctx.lineTo(cx, cy);
+            if (p === 0) {
+                ctx.moveTo(cx, cy);
+                continue;
+            }
+            var pTrigger = st.tpPartner[c.x + ',' + c.y];
+            if (pTrigger) {
+                var ptx = pTrigger.x * cs + cs / 2, pty = pTrigger.y * cs + cs / 2;
+                ctx.lineTo(ptx, pty);
+                teleportPathSegs.push([ptx, pty, cx, cy]);
+                ctx.moveTo(cx, cy);
+            } else {
+                ctx.lineTo(cx, cy);
+            }
         }
         ctx.stroke();
+
+        if (teleportPathSegs.length) {
+            ctx.strokeStyle = getCssVar('--teleport-line');
+            ctx.lineWidth = Math.max(2, cs * 0.22);
+            ctx.setLineDash([Math.max(2, cs * 0.22), Math.max(2, cs * 0.22)]);
+            ctx.beginPath();
+            teleportPathSegs.forEach(function (s) { ctx.moveTo(s[0], s[1]); ctx.lineTo(s[2], s[3]); });
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
 
         updateReadout(st, progress, edgesShown, pathShown);
     }
