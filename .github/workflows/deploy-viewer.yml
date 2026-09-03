@@ -1,0 +1,53 @@
+name: Deploy results viewer
+
+# Rebuilds maze.exe, regenerates bench_results.json against the current
+# code, and publishes it side-by-side with viewer.html to GitHub Pages -
+# so the hosted viewer always reflects whatever's on main, and its
+# auto-load (see viewer.html's own auto-load comment) always has a fresh
+# same-origin bench_results.json to find, no manual step required.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - name: Build
+        run: go build -o maze -v .
+
+      - name: Generate bench_results.json
+        run: ./maze -bench -summary-only
+
+      - name: Assemble site
+        run: |
+          mkdir -p _site
+          cp viewer.html _site/
+          cp bench_results.json _site/
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
