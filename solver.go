@@ -124,9 +124,27 @@ type Solver interface {
 
 var registry []Solver
 
-// Register adds an algorithm to the competition. Call it from an init()
-// in your solver_*.go file.
+// enabledSolverNames keeps benchmark and viewer output focused on the
+// hand-built solver families. Reference implementations stay compiled so
+// their direct unit tests and implementation notes remain available, but
+// they are not entered into a normal run.
+var enabledSolverNames = map[string]bool{
+	"BrenThread":            true,
+	"BrenThreadOptimized":   true,
+	"BrenThreadOptimizedV2": true,
+	"BrenThreadOptimizedV3": true,
+	"Hangeon":               true,
+	"HangeonOptimized":      true,
+	"HangeonOptimisedV2":    true,
+	"HangeonOptimisedV3":    true,
+}
+
+// Register adds an enabled algorithm to the competition. Call it from an
+// init() in your solver_*.go file.
 func Register(s Solver) {
+	if !enabledSolverNames[s.Name()] {
+		return
+	}
 	registry = append(registry, s)
 }
 
