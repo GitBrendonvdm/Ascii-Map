@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -198,68 +199,95 @@ const timingRuns = 200
 //     busy the machine happens to be at that moment shows up directly in
 //     the number.
 func runAllSolvers(m *Maze) []runResult {
-	var results []runResult
-	for _, solver := range Solvers() {
-		clone := m.Clone()
-
-		// One call to capture the actual answer to validate/render - also
-		// used to measure allocs/memBytes, since runtime.ReadMemStats has
-		// its own non-trivial overhead unsuitable for the tight timing
-		// loop below, and since a single call's allocation profile is
-		// already exactly reproducible (no averaging needed for a
-		// deterministic quantity).
-		var memBefore, memAfter runtime.MemStats
-		runtime.ReadMemStats(&memBefore)
-		sol := solver.Solve(clone)
-		runtime.ReadMemStats(&memAfter)
-		memBytes := int64(memAfter.TotalAlloc - memBefore.TotalAlloc)
-		allocs := int64(memAfter.Mallocs - memBefore.Mallocs)
-
-		// Repeat runs, reusing the same clone (all shipped solvers are
-		// read-only over the maze), purely to get wall-clock and CPU-time
-		// measurements finer than a single call's resolution. Informational
-		// only - see this function's doc comment.
-		cpuBefore := processCPUTime()
-		start := time.Now()
-		for i := 0; i < timingRuns; i++ {
-			solver.Solve(clone)
-		}
-		elapsed := time.Since(start) / timingRuns
-		cpuElapsed := (processCPUTime() - cpuBefore) / time.Duration(timingRuns)
-
-		ops := len(sol.Edges)
-		// Span defaults to 0 on Solution - the sentinel a single-threaded
-		// solver leaves unset, meaning "every discovery was sequentially
-		// dependent on the last, so span equals total work" (see
-		// Solution.Span's doc comment). Only a genuinely concurrent
-		// solver (BrenThread, BrenThreadOptimized) reports a real,
-		// smaller span.
-		span := sol.Span
-		if span == 0 {
-			span = ops
-		}
-
-		res := runResult{
-			name:     solver.Name(),
-			elapsed:  elapsed,
-			cpuTime:  cpuElapsed,
-			memBytes: memBytes,
-			allocs:   allocs,
-			ops:      ops,
-			span:     span,
-			primOps:  sol.PrimOps,
-			steps:    len(sol.Path) - 1,
-		}
-		if err := ValidatePath(m, sol.Path); err != nil {
-			res.valid = false
-			res.invalidReason = err.Error()
-		} else {
-			res.valid = true
-			res.rendered = m.RenderPath(sol.Path, sol.Visited)
-		}
-		results = append(results, res)
+	solvers := Solvers()
+	results := make([]runResult, len(solvers))
+	for i, solver := range solvers {
+		res := measureDeterministic(solver, m)
+		res.elapsed, res.cpuTime = timeSolver(solver, m)
+		results[i] = res
 	}
 	return results
+}
+
+// measureDeterministic runs solver once against a fresh clone of m and
+// captures everything about that run that's deterministic: allocs/
+// memBytes (from runtime.ReadMemStats) plus the solver's own internal
+// counters (ops/span/primOps/steps) and path validity.
+//
+// runtime.ReadMemStats is process-wide, not per-goroutine - it reports
+// this whole program's cumulative allocation counters, with no way to
+// isolate just the calling goroutine's share. That makes allocs/memBytes
+// exactly reproducible ("same maze, same algorithm -> same numbers, every
+// run") only while nothing else anywhere in the process is concurrently
+// allocating. A caller that wants to run multiple mazes' solvers in
+// parallel (see runBenchmark) MUST still call this function for every
+// solver/maze pair from a single goroutine, with no other allocating work
+// happening at the same time - see runBenchmark's own phase-1/phase-2
+// split for how that's arranged. ops/span/primOps/steps and validity have
+// no such constraint (they're the solver's own return value, not a
+// process-wide counter) and would be safe to compute concurrently
+// regardless - they're bundled in here only because they come from the
+// same Solve() call already needed for the alloc measurement, not because
+// they share its concurrency restriction.
+func measureDeterministic(solver Solver, m *Maze) runResult {
+	clone := m.Clone()
+
+	var memBefore, memAfter runtime.MemStats
+	runtime.ReadMemStats(&memBefore)
+	sol := solver.Solve(clone)
+	runtime.ReadMemStats(&memAfter)
+	memBytes := int64(memAfter.TotalAlloc - memBefore.TotalAlloc)
+	allocs := int64(memAfter.Mallocs - memBefore.Mallocs)
+
+	ops := len(sol.Edges)
+	// Span defaults to 0 on Solution - the sentinel a single-threaded
+	// solver leaves unset, meaning "every discovery was sequentially
+	// dependent on the last, so span equals total work" (see
+	// Solution.Span's doc comment). Only a genuinely concurrent
+	// solver (BrenThread, BrenThreadOptimized) reports a real,
+	// smaller span.
+	span := sol.Span
+	if span == 0 {
+		span = ops
+	}
+
+	res := runResult{
+		name:     solver.Name(),
+		memBytes: memBytes,
+		allocs:   allocs,
+		ops:      ops,
+		span:     span,
+		primOps:  sol.PrimOps,
+		steps:    len(sol.Path) - 1,
+	}
+	if err := ValidatePath(m, sol.Path); err != nil {
+		res.valid = false
+		res.invalidReason = err.Error()
+	} else {
+		res.valid = true
+		res.rendered = m.RenderPath(sol.Path, sol.Visited)
+	}
+	return res
+}
+
+// timeSolver repeats solver.Solve() against its own fresh clone of m
+// timingRuns times, purely to get wall-clock/CPU numbers finer than a
+// single call's resolution - informational only (see runAllSolvers' own
+// doc comment for why elapsed/cpuTime don't feed the score), and safe to
+// call concurrently with anything else, unlike measureDeterministic:
+// it never touches runtime.MemStats, so contention from other concurrent
+// work only makes the already-informational timing noisier, never wrong
+// in a way that matters.
+func timeSolver(solver Solver, m *Maze) (elapsed, cpuElapsed time.Duration) {
+	clone := m.Clone()
+	cpuBefore := processCPUTime()
+	start := time.Now()
+	for i := 0; i < timingRuns; i++ {
+		solver.Solve(clone)
+	}
+	elapsed = time.Since(start) / timingRuns
+	cpuElapsed = (processCPUTime() - cpuBefore) / time.Duration(timingRuns)
+	return elapsed, cpuElapsed
 }
 
 // formatBytes renders a byte count in whatever unit reads most naturally.
@@ -365,6 +393,57 @@ type aggregate struct {
 	runs       int // how many maze runs this average is actually over - 10 for a per-size aggregate, up to 10*len(benchmarkSizeTiers) for the cross-size overall one
 }
 
+// parallelFor calls fn(i) once for every i in [0,n), spread across a
+// bounded pool of min(n, runtime.NumCPU()) goroutines, and blocks until
+// every call has returned. Each i is handed to exactly one goroutine, so
+// fn is free to write to any state that's keyed by i alone (e.g. its own
+// slot in a preallocated slice) without further synchronization - it's
+// state SHARED across different i's that still needs its own locking, the
+// same as any other concurrent Go code.
+func parallelFor(n int, fn func(i int)) {
+	if n == 0 {
+		return
+	}
+	workers := runtime.NumCPU()
+	if workers > n {
+		workers = n
+	}
+	if workers < 1 {
+		workers = 1
+	}
+	idxCh := make(chan int)
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range idxCh {
+				fn(i)
+			}
+		}()
+	}
+	for i := 0; i < n; i++ {
+		idxCh <- i
+	}
+	close(idxCh)
+	wg.Wait()
+}
+
+// mazeJob is one (size tier, seed) combination's whole slice of work -
+// generate, measure, time, export - carried through runBenchmark's
+// phases. jobs are built once, in tier-then-seed order, and every phase
+// below either processes them in that same fixed order (sequential
+// phases) or in parallel keyed by each job's own index (parallel phases,
+// via parallelFor) - a job's own fields are never touched by any
+// goroutine but the one currently processing that job.
+type mazeJob struct {
+	tierIdx, seedIdx int
+	seed             int64
+	styleName        string
+	maze             *Maze
+	results          []runResult
+}
+
 // runBenchmark always sweeps every tier in benchmarkSizeTiers (see
 // seeds.go) and writes them all into ONE export file - one file, not one
 // per size, so the viewer's Size selector switches between in-memory
@@ -373,29 +452,86 @@ type aggregate struct {
 // here: the whole point is that `-bench` always produces the complete
 // picture in one shot, the same way it always solved every registered
 // algorithm rather than a chosen subset.
+//
+// The 5 tiers x 10 seeds = 50 mazes are fully independent of each other
+// (each Maze owns its own *rand.Rand - see NewMaze - so generating one
+// never touches another's random stream) and this runs them across three
+// phases instead of one maze at a time:
+//
+//  1. generate every maze, in parallel (parallelFor)
+//  2. measure every solver's deterministic numbers (allocs/memBytes plus
+//     its own ops/span/primOps/steps counters) on every maze, strictly
+//     SEQUENTIALLY - see measureDeterministic's own doc comment for why:
+//     runtime.ReadMemStats is process-wide, and running this phase
+//     concurrently with anything else that allocates would silently
+//     corrupt the allocs/memBytes numbers that feed the score.
+//  3. time every solver (the 200x-repeat timingRuns loop, informational
+//     only) and build each maze's JSON export, in parallel - this is the
+//     overwhelming majority of the total Solve() calls in the whole
+//     benchmark (200 timing repeats vs. 1 measurement + up to 1 export
+//     re-solve per solver per maze) and, unlike phase 2, has no
+//     process-wide-measurement constraint stopping it running concurrently.
+//
+// Phases 1 and 3 use up to runtime.NumCPU() goroutines; phase 2 is one
+// goroutine by design, not a missed opportunity to parallelize.
 func runBenchmark(summaryOnly bool, consoleWidthOverride int, consoleRoutes bool, outPath string) {
 	consoleWidth := resolveConsoleWidth(consoleWidthOverride)
+	solvers := Solvers()
+
+	jobs := make([]*mazeJob, 0, len(benchmarkSizeTiers)*len(BenchmarkSeeds))
+	for t := range benchmarkSizeTiers {
+		for s, seed := range BenchmarkSeeds {
+			jobs = append(jobs, &mazeJob{tierIdx: t, seedIdx: s, seed: seed, styleName: BenchmarkStyleNames[s]})
+		}
+	}
+
+	fmt.Fprintf(os.Stderr, "generating %d mazes (%d size tiers x %d seeds) across up to %d goroutines...\n", len(jobs), len(benchmarkSizeTiers), len(BenchmarkSeeds), runtime.NumCPU())
+	parallelFor(len(jobs), func(i int) {
+		j := jobs[i]
+		style, ok := mazeStyleByName(j.styleName)
+		if !ok {
+			fmt.Fprintf(os.Stderr, "internal error: benchmark style %q is not registered\n", j.styleName)
+			os.Exit(1)
+		}
+		tier := benchmarkSizeTiers[j.tierIdx]
+		j.maze = style.Generate(tier.width, tier.height, j.seed, BenchTeleporters)
+	})
+	fmt.Fprintln(os.Stderr, "done.")
+
+	fmt.Fprintf(os.Stderr, "measuring %d deterministic solver runs (sequential - see runBenchmark's own doc comment)...\n", len(jobs)*len(solvers))
+	for _, j := range jobs {
+		j.results = make([]runResult, len(solvers))
+		for si, solver := range solvers {
+			j.results[si] = measureDeterministic(solver, j.maze)
+		}
+	}
+	fmt.Fprintln(os.Stderr, "done.")
+
+	fmt.Fprintf(os.Stderr, "timing solvers and building export data across up to %d goroutines...\n", runtime.NumCPU())
+	jsonMazes := make([]jsonMaze, len(jobs))
+	parallelFor(len(jobs), func(i int) {
+		j := jobs[i]
+		for si, solver := range solvers {
+			j.results[si].elapsed, j.results[si].cpuTime = timeSolver(solver, j.maze)
+		}
+		scored := scoreResults(j.results)
+		jsonMazes[i] = buildJSONMazeWithSolutions(j.seed, j.styleName, j.maze, j.results, scored)
+	})
+	fmt.Fprintln(os.Stderr, "done.")
+	fmt.Fprintln(os.Stderr)
 
 	var sizeGroups []jsonSizeGroup
 	var allRuns []seedRun // every seed's results across every tier - overall (cross-size) leaderboard, below the loop, aggregates over this
+	jobIdx := 0
 	for _, tier := range benchmarkSizeTiers {
-		fmt.Fprintf(os.Stderr, "=== size %dx%d ===\n", tier.width, tier.height)
-
 		var runsBySeed []seedRun
-		for i, seed := range BenchmarkSeeds {
-			styleName := BenchmarkStyleNames[i]
-			style, ok := mazeStyleByName(styleName)
-			if !ok {
-				fmt.Fprintf(os.Stderr, "internal error: benchmark style %q is not registered\n", styleName)
-				os.Exit(1)
-			}
-			fmt.Fprintf(os.Stderr, "[%d/%d] %s (seed=%d): generating maze...\n", i+1, len(BenchmarkSeeds), styleName, seed)
-			m := style.Generate(tier.width, tier.height, seed, BenchTeleporters)
-			fmt.Fprintf(os.Stderr, "[%d/%d] %s (seed=%d): running %d algorithms...\n", i+1, len(BenchmarkSeeds), styleName, seed, len(Solvers()))
-			runsBySeed = append(runsBySeed, seedRun{seed: seed, style: styleName, maze: m, results: runAllSolvers(m)})
+		var tierJsonMazes []jsonMaze
+		for range BenchmarkSeeds {
+			j := jobs[jobIdx]
+			runsBySeed = append(runsBySeed, seedRun{seed: j.seed, style: j.styleName, maze: j.maze, results: j.results})
+			tierJsonMazes = append(tierJsonMazes, jsonMazes[jobIdx])
+			jobIdx++
 		}
-		fmt.Fprintln(os.Stderr, "done.")
-		fmt.Fprintln(os.Stderr)
 		allRuns = append(allRuns, runsBySeed...)
 
 		agg := aggregateScores(runsBySeed)
@@ -407,22 +543,10 @@ func runBenchmark(summaryOnly bool, consoleWidthOverride int, consoleRoutes bool
 		}
 		fmt.Println()
 
-		// Every algorithm's path/visited cells against every one of the 10
-		// mazes, plus the layout needed to redraw each maze - this is what
-		// lets viewer.html animate solves and compare algorithms side by
-		// side, instead of the console dumping ten mazes times N
-		// algorithms of ASCII art that scrolls past faster than anyone can
-		// read it.
-		fmt.Fprintf(os.Stderr, "building export for %dx%d (re-solving each algorithm once per maze to capture path/visited data)...\n", tier.width, tier.height)
-		jsonMazes := make([]jsonMaze, len(runsBySeed))
-		for i, sr := range runsBySeed {
-			scored := scoreResults(sr.results)
-			jsonMazes[i] = buildJSONMazeWithSolutions(sr.seed, sr.style, sr.maze, sr.results, scored)
-		}
 		sizeGroups = append(sizeGroups, jsonSizeGroup{
 			Width:       tier.width,
 			Height:      tier.height,
-			Mazes:       jsonMazes,
+			Mazes:       tierJsonMazes,
 			Leaderboard: buildJSONAggregate(agg),
 		})
 
