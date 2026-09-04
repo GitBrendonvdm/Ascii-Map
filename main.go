@@ -38,6 +38,10 @@ func mapSizePreset(name string) (width, height int, ok bool) {
 		return 100, 100, true
 	case "xlarge", "x-large":
 		return 250, 250, true
+	case "huge", "400", "400x400":
+		return 400, 400, true
+	case "massive", "1000", "1000x1000":
+		return 1000, 1000, true
 	default:
 		return 0, 0, false
 	}
@@ -48,7 +52,7 @@ func main() {
 
 	width := flag.Int("width", 21, "maze width in cells")
 	height := flag.Int("height", 15, "maze height in cells")
-	size := flag.String("size", "normal", "maze-size preset: normal (21x15), large (100x100), or xlarge (250x250)")
+	size := flag.String("size", "normal", "maze-size preset: normal (21x15), large (100x100), xlarge (250x250), huge (400x400), or massive (1000x1000)")
 	seed := flag.Int64("seed", 42, "random seed (same seed -> same maze)")
 	teleporters := flag.Int("teleporters", 2, "number of teleporter pairs")
 	braid := flag.Float64("braid", 0.15, "probability of opening an extra wall to create loops (0-1)")
@@ -81,7 +85,7 @@ func main() {
 
 	presetWidth, presetHeight, ok := mapSizePreset(*size)
 	if !ok {
-		fmt.Fprintf(os.Stderr, "unknown size preset %q; choose normal, large, or xlarge\n", *size)
+		fmt.Fprintf(os.Stderr, "unknown size preset %q; choose normal, large, xlarge, huge, or massive\n", *size)
 		os.Exit(1)
 	}
 	widthSpecified, heightSpecified := false, false
