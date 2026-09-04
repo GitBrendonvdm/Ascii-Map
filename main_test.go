@@ -17,3 +17,23 @@ func TestMapSizePresetLargeOptInSizes(t *testing.T) {
 		}
 	}
 }
+
+func TestBenchmarkIncludesEveryNamedLargeSize(t *testing.T) {
+	want := map[[2]int]bool{
+		{250, 250}:   false,
+		{400, 400}:   false,
+		{1000, 1000}: false,
+		{5000, 5000}: false,
+	}
+	for _, tier := range benchmarkSizeTiers {
+		key := [2]int{tier.width, tier.height}
+		if _, ok := want[key]; ok {
+			want[key] = true
+		}
+	}
+	for size, found := range want {
+		if !found {
+			t.Errorf("benchmark is missing named %dx%d size tier", size[0], size[1])
+		}
+	}
+}

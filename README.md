@@ -19,8 +19,8 @@ go build -o maze.exe .
 
 Size presets: `-size normal` (21x15, the default), `-size large` (100x100),
 `-size xlarge` (250x250), `-size huge` (400x400), `-size massive` (1000x1000),
-and `-size colossal` (5000x5000). The last three are opt-in single-run sizes and are intentionally
-not included in the default `-bench` sweep. Explicit `-width` and `-height` flags override
+and `-size colossal` (5000x5000). Every named size is included in the default
+`-bench` sweep and appears in the viewer's Map size selector. Explicit `-width` and `-height` flags override
 either dimension of the selected preset.
 
 Every registered algorithm runs against the same maze, each getting its own

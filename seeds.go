@@ -36,19 +36,17 @@ type sizeTier struct {
 // default since it's the smallest, fastest tier and matches every export
 // this project ever shipped before size tiers existed.
 //
-// Measured real export sizes for the full 10-style-maze sweep at each of
-// these: 21x15 ~15MB, 10x10 ~4.6MB, 25x25 ~30MB, 50x50 ~115MB, 100x100
-// ~433MB (one combined file is the sum of all of these, so budget for a
-// file in the 600MB range). That's real weight to ship and parse
-// client-side - measured to still work (100x100 alone parses in a few
-// seconds using several hundred MB of browser heap) but it's genuinely
-// heavy, which is the tradeoff of a full 10-maze sweep at every size in a
-// single file rather than fewer mazes at the larger sizes or separate
-// per-size files fetched on demand.
+// The large tiers deliberately remain in this shared export so the viewer's
+// size selector can compare the same two V3 solvers at every named size.
+// The 5,000×5,000 tier is correspondingly resource-intensive.
 var benchmarkSizeTiers = []sizeTier{
 	{width: 21, height: 15},
 	{width: 10, height: 10},
 	{width: 25, height: 25},
 	{width: 50, height: 50},
 	{width: 100, height: 100},
+	{width: 250, height: 250},
+	{width: 400, height: 400},
+	{width: 1000, height: 1000},
+	{width: 5000, height: 5000},
 }

@@ -289,7 +289,8 @@
     <button class="menu-btn" id="menuBtn" aria-label="Open menu" title="Mazes / leaderboard / algorithms">&#9776;</button>
     <h1>Ascii-Maze &mdash; Results Viewer</h1>
     <div class="status mono" id="status">No data loaded.</div>
-    <select id="sizeSelect" title="Switch to a different benchmark size tier already in the loaded file"></select>
+    <label class="mono" for="sizeSelect" title="Every benchmarked map size is available here after its results file is loaded">Map size</label>
+    <select id="sizeSelect" aria-label="Map size" title="Switch to any benchmarked map size in the loaded file"></select>
     <label class="filebtn" for="fileInput">Open JSON&hellip;</label>
     <input type="file" id="fileInput" accept=".json">
 </header>
