@@ -870,7 +870,7 @@
         if (aggRows === overallRows && aggRows) {
             html += '<p class="note">Overall mixes every size tier together. Score and Wins stay meaningful mixed like this (Score is already a ratio against the best algorithm on that exact maze, not an absolute number), but Steps/Span/PrimOps/Allocs/Mem are simple averages across wildly different maze sizes here, so treat them as rough texture rather than a real number - switch to "This size" for numbers that mean something concrete.</p>';
         }
-        html += '<p class="note">Score = weighted geometric mean of Steps/Ops/PrimOps/Allocs/Mem plus Span, each ratioed against the best algorithm on that maze. Span has half the weight of every other metric. All six are deterministic; wall-clock and CPU time are not scored. Ops is total discovery work, while PrimOps accounts for low-level looping and synchronization.</p>';
+        html += '<p class="note">Score = geometric mean of Steps/Ops/PrimOps/Allocs/Mem/Span, each ratioed against the best algorithm on that maze. All six metrics have equal weight and are deterministic; wall-clock and CPU time are not scored. Ops is total discovery work, while PrimOps accounts for low-level looping and synchronization.</p>';
         el.innerHTML = html;
         el.querySelectorAll('[data-board-mode]').forEach(function (btn) {
             btn.addEventListener('click', function () {
@@ -1057,7 +1057,7 @@
 
         var note = document.createElement('div');
         note.className = 'note';
-        note.textContent = 'Score is computed from steps/ops/primOps/allocs/mem plus half-weight span: all deterministic, on any machine. Ops is total discovery work; PrimOps also charges low-level looping and synchronization. Span rewards shorter concurrent dependency chains without making excess work free. Wall-clock and CPU time are context only.';
+        note.textContent = 'Score is computed equally from steps/ops/span/primOps/allocs/mem: all deterministic, on any machine. Ops is total discovery work; PrimOps also charges low-level looping and synchronization. Span rewards shorter concurrent dependency chains without making excess work free. Wall-clock and CPU time are context only.';
         wrap.appendChild(note);
 
         container.appendChild(wrap);

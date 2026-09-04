@@ -63,7 +63,7 @@ import (
 // exported for diagnostics and animation; PrimOps continues to account for
 // deterministic low-level work such as synchronization.
 //
-// v9: spanRatio returns to the score at half the weight of every other
+// v9: spanRatio returns to the score at the same weight as every other
 // dimension, rewarding lower dependency depth without making total work free.
 const exportFormatVersion = 9
 
@@ -99,7 +99,7 @@ type jsonResult struct {
 	Visited       []jsonCell `json:"visited"`
 	Edges         []jsonEdge `json:"edges"`
 	OpsCount      int        `json:"opsCount"`     // len(Edges); total work done, deterministic score input
-	SpanCount     int        `json:"spanCount"`    // critical-path length; lower is better, half-weight score input
+	SpanCount     int        `json:"spanCount"`    // critical-path length; lower is better, deterministic score input
 	PrimOpsCount  int64      `json:"primOpsCount"` // deterministic CPU-cost proxy; deterministic score input - see Solution.PrimOps
 	AllocsCount   int64      `json:"allocsCount"`  // heap allocation count; deterministic score input
 	MemBytes      int64      `json:"memBytes"`     // bytes allocated; deterministic score input

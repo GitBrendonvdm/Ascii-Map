@@ -34,7 +34,7 @@ import (
 // entirely invisible to allocs/mem/ops alone (see Solution.PrimOps for
 // the exact, deterministic accounting).
 //
-// Span is scored at half the weight of every other dimension. It is an ideal
+// Span is scored at the same weight as every other dimension. It is an ideal
 // dependency-depth model, not the total work actually performed; it omits
 // worker startup and real synchronization overhead. Ops (len(Edges)) still
 // charges every discovery, regardless of whether it ran serially or
@@ -63,7 +63,7 @@ type scoredResult struct {
 
 const (
 	standardScoreWeight = 1.0
-	spanScoreWeight     = 0.5
+	spanScoreWeight     = 1.0
 	totalScoreWeight    = 5*standardScoreWeight + spanScoreWeight
 )
 
@@ -162,9 +162,8 @@ func scoreResults(results []runResult) []scoredResult {
 			primOpsRatio: primOpsRatio,
 			allocsRatio:  allocsRatio,
 			memRatio:     memRatio,
-			// Weighted geometric mean: span is included, but its 0.5
-			// exponent gives it half the influence of the five standard
-			// dimensions. Unlike a raw product, it stays on the same
+			// Weighted geometric mean: span has the same influence as the
+			// five standard dimensions. Unlike a raw product, it stays on the same
 			// human-readable scale as the ratios themselves.
 			score: math.Pow(
 				math.Pow(stepsRatio, standardScoreWeight)*

@@ -224,7 +224,7 @@ solve doesn't dominate one that takes 14 just because its raw numbers are
 bigger. The score is a weighted geometric mean of those six ratios (1.0 =
 matched the best in everything on that maze); in benchmark mode, an
 algorithm's final score is the plain average of its per-maze scores across
-all 10 mazes. `span` has half the weight of steps, ops, primOps, allocs, and
+all 10 mazes. `span` has the same weight as steps, ops, primOps, allocs, and
 mem: it rewards a shorter dependency chain without letting duplicated or
 speculative concurrent work become free.
 

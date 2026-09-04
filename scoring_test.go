@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestScoreResultsIncludesSpanAtHalfWeight(t *testing.T) {
+func TestScoreResultsIncludesSpanAtEqualWeight(t *testing.T) {
 	results := []runResult{
 		{name: "short-span", valid: true, steps: 10, ops: 10, span: 10, primOps: 10, allocs: 10, memBytes: 10},
 		{name: "long-span", valid: true, steps: 10, ops: 10, span: 40, primOps: 10, allocs: 10, memBytes: 10},
