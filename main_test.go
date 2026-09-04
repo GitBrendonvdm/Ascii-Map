@@ -9,6 +9,7 @@ func TestMapSizePresetLargeOptInSizes(t *testing.T) {
 	}{
 		{name: "huge", width: 400, height: 400},
 		{name: "massive", width: 1000, height: 1000},
+		{name: "colossal", width: 5000, height: 5000},
 	} {
 		width, height, ok := mapSizePreset(test.name)
 		if !ok || width != test.width || height != test.height {
