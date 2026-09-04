@@ -32,7 +32,33 @@ import (
 // cost (looping, branching, synchronization) that steps/span/allocs/mem
 // all leave uncharged - see Solution.PrimOps in solver.go and scoredResult
 // in scoring.go for why.
-const exportFormatVersion = 5
+//
+// v6: top-level Mazes replaced by Sizes, a list of jsonSizeGroup (width/
+// height + that size's own mazes + that size's own leaderboard) - one
+// export file now holds every benchmark size tier (see benchmarkSizeTiers
+// in seeds.go) instead of one file per size. The top-level Leaderboard
+// field is repurposed to mean the OVERALL leaderboard (every maze run
+// across every size tier, not just one) - see runBenchmark's own doc
+// comment for why mixing sizes into one leaderboard is still meaningful
+// (score is already a ratio, not an absolute).
+//
+// v7: the file is no longer one big indented JSON document - it's
+// newline-delimited (NDJSON): a small header line (jsonExportHeader -
+// formatVersion/generatedAt/directionBits/sizeIndex/the overall
+// leaderboard) followed by one compact JSON line per size group
+// (jsonSizeGroup, in the same order as the header's sizeIndex). This is
+// what lets viewer.html stream-read and parse ONLY the one size tier a
+// viewer actually asks for, instead of the whole file - a full
+// benchmarkSizeTiers sweep measures at 700MB+ as one document, well past
+// what a browser can reliably buffer and parse in one shot (confirmed:
+// fetch() silently returns an empty body for a response that size in
+// testing, even though the same bytes transfer fine via curl), while the
+// single largest tier alone (100x100, ~430MB) has been measured to parse
+// fine on its own. Reading line-by-line and discarding every line that
+// isn't the requested one bounds the viewer's memory use to roughly one
+// tier's worth, however many tiers the file actually has - see
+// streamNDJSONLine in viewer.html.
+const exportFormatVersion = 7
 
 type jsonCell struct {
 	X int `json:"x"`
@@ -112,12 +138,37 @@ type jsonAggregate struct {
 	Runs         int     `json:"runs"`
 }
 
-type jsonExport struct {
-	FormatVersion int             `json:"formatVersion"`
-	GeneratedAt   string          `json:"generatedAt"`
-	DirectionBits jsonDirection   `json:"directionBits"`
-	Mazes         []jsonMaze      `json:"mazes"`
-	Leaderboard   []jsonAggregate `json:"leaderboard,omitempty"`
+// jsonSizeGroup is every maze/leaderboard entry for one benchmark size
+// tier (see benchmarkSizeTiers in seeds.go) - width/height match every
+// maze inside it exactly, since a tier's own mazes are all generated at
+// that one size.
+type jsonSizeGroup struct {
+	Width       int             `json:"width"`
+	Height      int             `json:"height"`
+	Mazes       []jsonMaze      `json:"mazes"`
+	Leaderboard []jsonAggregate `json:"leaderboard,omitempty"`
+}
+
+// jsonSizeIndexEntry is a size tier's dimensions only - no mazes, no
+// leaderboard - so the header line can tell a viewer every tier that
+// exists (to populate a size picker) without it having to stream past any
+// of the actual (large) group lines first.
+type jsonSizeIndexEntry struct {
+	Width  int `json:"width"`
+	Height int `json:"height"`
+}
+
+// jsonExportHeader is line 1 of the NDJSON export file (see
+// exportFormatVersion's v7 note) - deliberately small (no maze data) so a
+// viewer can safely read and parse it whole every time, the same way the
+// old single-document format worked, before deciding which (much larger)
+// group line to stream in next.
+type jsonExportHeader struct {
+	FormatVersion int                  `json:"formatVersion"`
+	GeneratedAt   string               `json:"generatedAt"`
+	DirectionBits jsonDirection        `json:"directionBits"`
+	SizeIndex     []jsonSizeIndexEntry `json:"sizeIndex"`
+	Leaderboard   []jsonAggregate      `json:"leaderboard,omitempty"` // overall - every maze run across every size tier, see exportFormatVersion's v6 note
 }
 
 type jsonDirection struct {
@@ -252,21 +303,46 @@ func buildJSONAggregate(agg []aggregate) []jsonAggregate {
 			AvgElapsedNs: a.avgTime.Nanoseconds(),
 			AvgCPUNs:     a.avgCPU.Nanoseconds(),
 			Wins:         a.wins,
-			Runs:         len(BenchmarkSeeds),
+			Runs:         a.runs,
 		}
 	}
 	return out
 }
 
-func writeExportJSON(path string, data jsonExport) error {
-	data.FormatVersion = exportFormatVersion
-	data.GeneratedAt = time.Now().Format(time.RFC3339)
+// writeBenchExportNDJSON writes the newline-delimited export format (see
+// exportFormatVersion's v7 note): a small header line, then one compact
+// JSON line per group in groups, in that same order. json.Encoder.Encode
+// already writes its value compact (no indentation, since SetIndent is
+// never called here) followed by exactly one trailing '\n' per call - that
+// per-call newline is the whole of the line-framing this format needs, so
+// nothing here manually concatenates a "\n" onto anything.
+func writeBenchExportNDJSON(path string, directionBits jsonDirection, groups []jsonSizeGroup, overallLeaderboard []jsonAggregate) error {
 	f, err := os.Create(path)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
+
+	sizeIndex := make([]jsonSizeIndexEntry, len(groups))
+	for i, g := range groups {
+		sizeIndex[i] = jsonSizeIndexEntry{Width: g.Width, Height: g.Height}
+	}
+	header := jsonExportHeader{
+		FormatVersion: exportFormatVersion,
+		GeneratedAt:   time.Now().Format(time.RFC3339),
+		DirectionBits: directionBits,
+		SizeIndex:     sizeIndex,
+		Leaderboard:   overallLeaderboard,
+	}
+
 	enc := json.NewEncoder(f)
-	enc.SetIndent("", "  ")
-	return enc.Encode(data)
+	if err := enc.Encode(header); err != nil {
+		return err
+	}
+	for _, g := range groups {
+		if err := enc.Encode(g); err != nil {
+			return err
+		}
+	}
+	return nil
 }

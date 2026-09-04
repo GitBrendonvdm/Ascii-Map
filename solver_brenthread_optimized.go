@@ -74,6 +74,14 @@ func (BrenThreadOptimizedSolver) Solve(m *Maze) Solution {
 	leg1Path, leg1Edges, leg1Visited, leg1Span, leg1PrimOps := runBrenThreadLeg(neighbors, cellOf, n, maxDist, idx(m.Start), idx(m.Key))
 	leg2Path, leg2Edges, leg2Visited, leg2Span, leg2PrimOps := runBrenThreadLeg(neighbors, cellOf, n, maxDist, idx(m.Key), idx(m.Exit))
 
+	// leg2 runs after leg1 finishes (see Span's own doc comment below), so
+	// its Depth numbering - which starts back at 1 relative to Key - is
+	// offset by leg1Span here to keep every edge's Depth meaningful as one
+	// continuous timeline across the whole combined search.
+	for i := range leg2Edges {
+		leg2Edges[i].Depth += leg1Span
+	}
+
 	visited := append(leg1Visited, leg2Visited...)
 	edges := append(leg1Edges, leg2Edges...)
 	if leg1Path == nil || leg2Path == nil {
@@ -317,11 +325,11 @@ func runBrenThreadLeg(neighbors [][]flatEdge, cellOf []Cell, n, maxDist int, src
 					next[c] = bucketHead[d]
 					bucketHead[d] = c
 					visited = append(visited, cellOf[c])
-					edges = append(edges, Edge{From: cellOf[posIdx], To: cellOf[c]})
 					depth[c] = depth[posIdx] + 1
 					if depth[c] > maxDepth {
 						maxDepth = depth[c]
 					}
+					edges = append(edges, Edge{From: cellOf[posIdx], To: cellOf[c], Depth: int(depth[c])})
 				}
 				pending += newCount - 1 // the new claims, minus this item finishing
 				cond.Broadcast()
