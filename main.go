@@ -17,7 +17,7 @@ type runResult struct {
 	memBytes int64
 	allocs   int64 // heap allocation count (runtime.MemStats.Mallocs delta) - deterministic score input
 	ops      int   // search effort: len(Solution.Edges) - deterministic score input
-	span     int   // critical-path length: Solution.Span, or ops when unset; informational only
+	span     int   // critical-path length: Solution.Span, or ops when unset; deterministic score input
 	primOps  int64 // deterministic CPU-cost proxy: Solution.PrimOps - feeds the score, see that field's doc comment
 	steps    int   // moves taken (path cell count - 1)
 
@@ -42,6 +42,8 @@ func mapSizePreset(name string) (width, height int, ok bool) {
 		return 400, 400, true
 	case "massive", "1000", "1000x1000":
 		return 1000, 1000, true
+	case "colossal", "5000", "5000x5000":
+		return 5000, 5000, true
 	default:
 		return 0, 0, false
 	}
@@ -52,7 +54,7 @@ func main() {
 
 	width := flag.Int("width", 21, "maze width in cells")
 	height := flag.Int("height", 15, "maze height in cells")
-	size := flag.String("size", "normal", "maze-size preset: normal (21x15), large (100x100), xlarge (250x250), huge (400x400), or massive (1000x1000)")
+	size := flag.String("size", "normal", "maze-size preset: normal (21x15), large (100x100), xlarge (250x250), huge (400x400), massive (1000x1000), or colossal (5000x5000)")
 	seed := flag.Int64("seed", 42, "random seed (same seed -> same maze)")
 	teleporters := flag.Int("teleporters", 2, "number of teleporter pairs")
 	braid := flag.Float64("braid", 0.15, "probability of opening an extra wall to create loops (0-1)")
@@ -85,7 +87,7 @@ func main() {
 
 	presetWidth, presetHeight, ok := mapSizePreset(*size)
 	if !ok {
-		fmt.Fprintf(os.Stderr, "unknown size preset %q; choose normal, large, xlarge, huge, or massive\n", *size)
+		fmt.Fprintf(os.Stderr, "unknown size preset %q; choose normal, large, xlarge, huge, massive, or colossal\n", *size)
 		os.Exit(1)
 	}
 	widthSpecified, heightSpecified := false, false
@@ -304,7 +306,7 @@ func printPanelsOrSummary(results []runResult, summaryOnly bool, consoleWidth in
 func printLeaderboard(title string, results []runResult) {
 	scored := scoreResults(results)
 
-	fmt.Printf("--- %s (score = geometric mean of steps/ops/primOps/allocs/mem ratios vs. the best on this maze; 1.0 = best in everything, smallest first; span/time/cpu below are informational only - see scoring.go) ---\n", title)
+	fmt.Printf("--- %s (score = geometric mean of steps/ops/span/primOps/allocs/mem ratios vs. the best on this maze; 1.0 = best in everything, smallest first; time/cpu are informational only - see scoring.go) ---\n", title)
 
 	if len(scored) > 0 {
 		minSteps := scored[0].steps
@@ -353,7 +355,7 @@ type aggregate struct {
 	avgScore   float64
 	avgSteps   float64
 	avgOps     float64 // total work; deterministic score input
-	avgSpan    float64 // informational only
+	avgSpan    float64 // deterministic score input
 	avgPrimOps float64 // deterministic CPU-cost proxy - feeds the score, see Solution.PrimOps
 	avgAllocs  float64
 	avgMem     float64
@@ -398,7 +400,7 @@ func runBenchmark(summaryOnly bool, consoleWidthOverride int, consoleRoutes bool
 
 		agg := aggregateScores(runsBySeed)
 
-		fmt.Printf("=== %dx%d - average score across all %d seeds (score = geometric mean of steps/ops/primOps/allocs/mem ratios vs. the best on each maze; smallest first; span/time/cpu below are informational only - see scoring.go) ===\n", tier.width, tier.height, len(BenchmarkSeeds))
+		fmt.Printf("=== %dx%d - average score across all %d seeds (score = geometric mean of steps/ops/span/primOps/allocs/mem ratios vs. the best on each maze; smallest first; time/cpu are informational only - see scoring.go) ===\n", tier.width, tier.height, len(BenchmarkSeeds))
 		for i, a := range agg {
 			fmt.Printf("%2d. %-20s avg score %6.2f   avg %6.1f steps   avg %7.1f ops   avg %9.1f primOps   avg %7.1f allocs   avg mem %10s   won %d/%d   (avg span %.1f, avg time %s, avg cpu %s)\n",
 				i+1, a.name, a.avgScore, a.avgSteps, a.avgOps, a.avgPrimOps, a.avgAllocs, formatBytes(int64(a.avgMem)), a.wins, a.runs, a.avgSpan, a.avgTime, a.avgCPU)
@@ -438,8 +440,7 @@ func runBenchmark(summaryOnly bool, consoleWidthOverride int, consoleRoutes bool
 	// so it stays comparable across wildly different maze sizes the same
 	// way it already does across the 10 differently-styled mazes within
 	// one size - unlike the raw steps/span/etc. averages also shown here,
-	// which mix scales freely and are informational only, same as within
-	// one size tier.
+	// which mix scales freely and are less directly comparable than the score.
 	overallAgg := aggregateScores(allRuns)
 	fmt.Printf("=== Overall - average score across all %d maze runs (%d seeds x %d size tiers) ===\n", len(allRuns), len(BenchmarkSeeds), len(benchmarkSizeTiers))
 	for i, a := range overallAgg {
@@ -485,8 +486,8 @@ func printRouteVisualizer(agg []aggregate, runsBySeed []seedRun, consoleWidth in
 
 // aggregateScores scores every seed's results (see scoreResults in
 // scoring.go), averages each algorithm's score/steps/span/allocs/mem (the
-// deterministic quantities scored on) plus ops/time/cpu (informational
-// only) across all seeds it was valid in, and returns them sorted
+// deterministic quantities scored on) plus time/cpu (informational only)
+// across all seeds it was valid in, and returns them sorted
 // best-average-score first. A seed's top scorer counts as a "win" for
 // that seed.
 func aggregateScores(runsBySeed []seedRun) []aggregate {

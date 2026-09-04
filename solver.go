@@ -129,13 +129,7 @@ var registry []Solver
 // their direct unit tests and implementation notes remain available, but
 // they are not entered into a normal run.
 var enabledSolverNames = map[string]bool{
-	"BrenThread":            true,
-	"BrenThreadOptimized":   true,
-	"BrenThreadOptimizedV2": true,
 	"BrenThreadOptimizedV3": true,
-	"Hangeon":               true,
-	"HangeonOptimized":      true,
-	"HangeonOptimisedV2":    true,
 	"HangeonOptimisedV3":    true,
 }
 

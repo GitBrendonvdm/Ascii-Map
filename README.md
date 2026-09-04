@@ -18,9 +18,9 @@ go build -o maze.exe .
 ```
 
 Size presets: `-size normal` (21x15, the default), `-size large` (100x100),
-`-size xlarge` (250x250), `-size huge` (400x400), and `-size massive`
-(1000x1000). The last two are opt-in single-run sizes and are intentionally
-not included in the default `-bench` sweep. Explicit `-width` and `-height` flags override
+`-size xlarge` (250x250), `-size huge` (400x400), `-size massive` (1000x1000),
+and `-size colossal` (5000x5000). Every named size is included in the default
+`-bench` sweep and appears in the viewer's Map size selector. Explicit `-width` and `-height` flags override
 either dimension of the selected preset.
 
 Every registered algorithm runs against the same maze, each getting its own
@@ -39,7 +39,7 @@ Flags:
 | `-seed`            | 42        | RNG seed - same seed + dimensions + style = identical maze            |
 | `-width`           | 21        | maze width in cells (min 5)                                           |
 | `-height`          | 15        | maze height in cells (min 5)                                          |
-| `-size`            | "normal"  | map-size preset: `normal` (21x15), `large` (100x100), `xlarge` (250x250), `huge` (400x400), or `massive` (1000x1000); explicit width/height override it |
+| `-size`            | "normal"  | map-size preset: `normal` (21x15), `large` (100x100), `xlarge` (250x250), `huge` (400x400), `massive` (1000x1000), or `colossal` (5000x5000); explicit width/height override it |
 | `-teleporters`     | 2         | number of teleporter pairs                                            |
 | `-style`           | "Braided" | maze generation style; `-list-styles` prints every registered one     |
 | `-braid`           | 0.15      | probability of knocking down an extra wall to create a loop (Braided only) |
@@ -214,31 +214,32 @@ Each algorithm's steps, search effort (`ops` - the size of the route's
 discovery tree, `len(Solution.Edges)`), allocation count (`allocs` -
 `runtime.MemStats.Mallocs` delta), and memory allocated (`mem` -
 `TotalAlloc` delta), plus deterministic low-level work (`primOps` -
-direction checks, queue work, and synchronization attempts) are each turned
+direction checks, queue work, and synchronization attempts), plus
+critical-path depth (`span`), are each turned
 into a ratio against whichever
 algorithm did *best in that one dimension on that one maze* - so an
 algorithm that's merely fast can't out-score one that found a shorter
 route just by being fast, and a maze that naturally takes 300 steps to
 solve doesn't dominate one that takes 14 just because its raw numbers are
-bigger. The score is the geometric mean of those five ratios (1.0 =
+bigger. The score is a weighted geometric mean of those six ratios (1.0 =
 matched the best in everything on that maze); in benchmark mode, an
 algorithm's final score is the plain average of its per-maze scores across
-all 10 mazes.
+all 10 mazes. `span` has the same weight as steps, ops, primOps, allocs, and
+mem: it rewards a shorter dependency chain without letting duplicated or
+speculative concurrent work become free.
 
 Deliberately not wall-clock time or CPU time (`diagnostics_windows.go` /
 `diagnostics_other.go`) - both are still measured and shown in the viewer
 as "does this feel fast" context, but they depend on how busy the machine
 running the benchmark happens to be at that exact moment, which makes the
 same algorithm on the same maze report a different number every run. Steps,
-ops, primOps, allocs, and mem are all a pure function of the code path
+ops, span, primOps, allocs, and mem are all a pure function of the code path
 taken: same maze, same algorithm, same numbers, every time, on any machine,
 busy or idle - which is what makes them fair to actually rank on. See
 `scoring.go`'s doc comment for the full reasoning.
 
-`span` remains in the exported result as a visualization measure only: the
-viewer reveals every edge with the same discovery depth together, then moves
-to the next depth. It is not a score input, so parallelism is visible without
-making duplicated or speculative concurrent work free.
+`span` also drives the viewer animation: every edge with the same discovery
+depth appears together before the next generation begins.
 
 Current entries: `BFS` (map-based reference implementation, always
 optimal), `DFS` (naive baseline, fast but not remotely shortest), `A-Star`

@@ -289,7 +289,8 @@
     <button class="menu-btn" id="menuBtn" aria-label="Open menu" title="Mazes / leaderboard / algorithms">&#9776;</button>
     <h1>Ascii-Maze &mdash; Results Viewer</h1>
     <div class="status mono" id="status">No data loaded.</div>
-    <select id="sizeSelect" title="Switch to a different benchmark size tier already in the loaded file"></select>
+    <label class="mono" for="sizeSelect" title="Every benchmarked map size is available here after its results file is loaded">Map size</label>
+    <select id="sizeSelect" aria-label="Map size" title="Switch to any benchmarked map size in the loaded file"></select>
     <label class="filebtn" for="fileInput">Open JSON&hellip;</label>
     <input type="file" id="fileInput" accept=".json">
 </header>
@@ -869,7 +870,7 @@
         if (aggRows === overallRows && aggRows) {
             html += '<p class="note">Overall mixes every size tier together. Score and Wins stay meaningful mixed like this (Score is already a ratio against the best algorithm on that exact maze, not an absolute number), but Steps/Span/PrimOps/Allocs/Mem are simple averages across wildly different maze sizes here, so treat them as rough texture rather than a real number - switch to "This size" for numbers that mean something concrete.</p>';
         }
-        html += '<p class="note">Score = geometric mean of Steps/Ops/PrimOps/Allocs/Mem, each ratioed against the best algorithm in that dimension on that maze. All five are deterministic, so wall-clock and CPU time are not scored. Ops is total discovery work, while PrimOps deterministically accounts for low-level work such as looping and synchronization. ¹Span is retained only as an animation/diagnostic measure of discovery-tree depth; it is not a score input.</p>';
+        html += '<p class="note">Score = geometric mean of Steps/Ops/PrimOps/Allocs/Mem/Span, each ratioed against the best algorithm on that maze. All six metrics have equal weight and are deterministic; wall-clock and CPU time are not scored. Ops is total discovery work, while PrimOps accounts for low-level looping and synchronization.</p>';
         el.innerHTML = html;
         el.querySelectorAll('[data-board-mode]').forEach(function (btn) {
             btn.addEventListener('click', function () {
@@ -1056,7 +1057,7 @@
 
         var note = document.createElement('div');
         note.className = 'note';
-        note.textContent = 'Score is computed from steps/ops/primOps/allocs/mem - deterministic, same every run on any machine. Ops is total discovery work; PrimOps also charges low-level looping and synchronization. Span is retained only to animate concurrent discovery generations. Wall-clock and CPU time are context only because they depend on machine load.';
+        note.textContent = 'Score is computed equally from steps/ops/span/primOps/allocs/mem: all deterministic, on any machine. Ops is total discovery work; PrimOps also charges low-level looping and synchronization. Span rewards shorter concurrent dependency chains without making excess work free. Wall-clock and CPU time are context only.';
         wrap.appendChild(note);
 
         container.appendChild(wrap);
@@ -1447,8 +1448,8 @@
         var mode = modeSelect.value;
 
         // Proportional mode is paced by span for visualization only. It
-        // preserves visible parallel generations and their barriers; score
-        // uses total Ops and PrimOps, never wall-clock timing.
+        // preserves visible parallel generations and their barriers; scoring
+        // uses deterministic metrics, never wall-clock timing.
         var maxPace = 1;
         if (mode === 'proportional') {
             panelState.forEach(function (st) { maxPace = Math.max(maxPace, st.result.spanCount || st.edges.length); });

@@ -62,7 +62,10 @@ import (
 // v8: deterministic score uses total ops rather than Span. Span remains
 // exported for diagnostics and animation; PrimOps continues to account for
 // deterministic low-level work such as synchronization.
-const exportFormatVersion = 8
+//
+// v9: spanRatio returns to the score at the same weight as every other
+// dimension, rewarding lower dependency depth without making total work free.
+const exportFormatVersion = 9
 
 type jsonCell struct {
 	X int `json:"x"`
@@ -96,7 +99,7 @@ type jsonResult struct {
 	Visited       []jsonCell `json:"visited"`
 	Edges         []jsonEdge `json:"edges"`
 	OpsCount      int        `json:"opsCount"`     // len(Edges); total work done, deterministic score input
-	SpanCount     int        `json:"spanCount"`    // critical-path length; animation/diagnostic only
+	SpanCount     int        `json:"spanCount"`    // critical-path length; lower is better, deterministic score input
 	PrimOpsCount  int64      `json:"primOpsCount"` // deterministic CPU-cost proxy; deterministic score input - see Solution.PrimOps
 	AllocsCount   int64      `json:"allocsCount"`  // heap allocation count; deterministic score input
 	MemBytes      int64      `json:"memBytes"`     // bytes allocated; deterministic score input
@@ -105,6 +108,7 @@ type jsonResult struct {
 	Score         float64    `json:"score,omitempty"`
 	StepsRatio    float64    `json:"stepsRatio,omitempty"`
 	OpsRatio      float64    `json:"opsRatio,omitempty"`
+	SpanRatio     float64    `json:"spanRatio,omitempty"`
 	PrimOpsRatio  float64    `json:"primOpsRatio,omitempty"`
 	AllocsRatio   float64    `json:"allocsRatio,omitempty"`
 	MemRatio      float64    `json:"memRatio,omitempty"`
@@ -245,6 +249,7 @@ func buildJSONMaze(seed int64, style string, m *Maze, results []runResult, score
 			jr.Score = s.score
 			jr.StepsRatio = s.stepsRatio
 			jr.OpsRatio = s.opsRatio
+			jr.SpanRatio = s.spanRatio
 			jr.PrimOpsRatio = s.primOpsRatio
 			jr.AllocsRatio = s.allocsRatio
 			jr.MemRatio = s.memRatio
