@@ -58,7 +58,11 @@ import (
 // isn't the requested one bounds the viewer's memory use to roughly one
 // tier's worth, however many tiers the file actually has - see
 // streamNDJSONLine in viewer.html.
-const exportFormatVersion = 7
+//
+// v8: deterministic score uses total ops rather than Span. Span remains
+// exported for diagnostics and animation; PrimOps continues to account for
+// deterministic low-level work such as synchronization.
+const exportFormatVersion = 8
 
 type jsonCell struct {
 	X int `json:"x"`
@@ -91,8 +95,8 @@ type jsonResult struct {
 	Path          []jsonCell `json:"path"`
 	Visited       []jsonCell `json:"visited"`
 	Edges         []jsonEdge `json:"edges"`
-	OpsCount      int        `json:"opsCount"`     // len(Edges); total work done, informational only - see scoring.go for why span, not this, feeds the score
-	SpanCount     int        `json:"spanCount"`    // critical-path length; deterministic score input
+	OpsCount      int        `json:"opsCount"`     // len(Edges); total work done, deterministic score input
+	SpanCount     int        `json:"spanCount"`    // critical-path length; animation/diagnostic only
 	PrimOpsCount  int64      `json:"primOpsCount"` // deterministic CPU-cost proxy; deterministic score input - see Solution.PrimOps
 	AllocsCount   int64      `json:"allocsCount"`  // heap allocation count; deterministic score input
 	MemBytes      int64      `json:"memBytes"`     // bytes allocated; deterministic score input
@@ -100,7 +104,7 @@ type jsonResult struct {
 	CPUNs         int64      `json:"cpuNs"`        // informational only - see scoring.go
 	Score         float64    `json:"score,omitempty"`
 	StepsRatio    float64    `json:"stepsRatio,omitempty"`
-	SpanRatio     float64    `json:"spanRatio,omitempty"`
+	OpsRatio      float64    `json:"opsRatio,omitempty"`
 	PrimOpsRatio  float64    `json:"primOpsRatio,omitempty"`
 	AllocsRatio   float64    `json:"allocsRatio,omitempty"`
 	MemRatio      float64    `json:"memRatio,omitempty"`
@@ -127,8 +131,8 @@ type jsonAggregate struct {
 	Algorithm    string  `json:"algorithm"`
 	AvgScore     float64 `json:"avgScore"`
 	AvgSteps     float64 `json:"avgSteps"`
-	AvgOps       float64 `json:"avgOps"` // total work; informational only - see scoring.go
-	AvgSpan      float64 `json:"avgSpan"`
+	AvgOps       float64 `json:"avgOps"`     // total work; deterministic score input
+	AvgSpan      float64 `json:"avgSpan"`    // animation/diagnostic only
 	AvgPrimOps   float64 `json:"avgPrimOps"` // deterministic CPU-cost proxy - see Solution.PrimOps
 	AvgAllocs    float64 `json:"avgAllocs"`
 	AvgMemBytes  float64 `json:"avgMemBytes"`
@@ -240,7 +244,7 @@ func buildJSONMaze(seed int64, style string, m *Maze, results []runResult, score
 		if s, ok := scoreByName[r.name]; ok {
 			jr.Score = s.score
 			jr.StepsRatio = s.stepsRatio
-			jr.SpanRatio = s.spanRatio
+			jr.OpsRatio = s.opsRatio
 			jr.PrimOpsRatio = s.primOpsRatio
 			jr.AllocsRatio = s.allocsRatio
 			jr.MemRatio = s.memRatio

@@ -211,12 +211,14 @@ Rules for a valid entry:
 Each algorithm's steps, search effort (`ops` - the size of the route's
 discovery tree, `len(Solution.Edges)`), allocation count (`allocs` -
 `runtime.MemStats.Mallocs` delta), and memory allocated (`mem` -
-`TotalAlloc` delta) are each turned into a ratio against whichever
+`TotalAlloc` delta), plus deterministic low-level work (`primOps` -
+direction checks, queue work, and synchronization attempts) are each turned
+into a ratio against whichever
 algorithm did *best in that one dimension on that one maze* - so an
 algorithm that's merely fast can't out-score one that found a shorter
 route just by being fast, and a maze that naturally takes 300 steps to
 solve doesn't dominate one that takes 14 just because its raw numbers are
-bigger. The score is the geometric mean of those four ratios (1.0 =
+bigger. The score is the geometric mean of those five ratios (1.0 =
 matched the best in everything on that maze); in benchmark mode, an
 algorithm's final score is the plain average of its per-maze scores across
 all 10 mazes.
@@ -226,10 +228,15 @@ Deliberately not wall-clock time or CPU time (`diagnostics_windows.go` /
 as "does this feel fast" context, but they depend on how busy the machine
 running the benchmark happens to be at that exact moment, which makes the
 same algorithm on the same maze report a different number every run. Steps,
-ops, allocs, and mem are all a pure function of the code path taken: same
-maze, same algorithm, same numbers, every time, on any machine, busy or
-idle - which is what makes them fair to actually rank on. See
+ops, primOps, allocs, and mem are all a pure function of the code path
+taken: same maze, same algorithm, same numbers, every time, on any machine,
+busy or idle - which is what makes them fair to actually rank on. See
 `scoring.go`'s doc comment for the full reasoning.
+
+`span` remains in the exported result as a visualization measure only: the
+viewer reveals every edge with the same discovery depth together, then moves
+to the next depth. It is not a score input, so parallelism is visible without
+making duplicated or speculative concurrent work free.
 
 Current entries: `BFS` (map-based reference implementation, always
 optimal), `DFS` (naive baseline, fast but not remotely shortest), `A-Star`

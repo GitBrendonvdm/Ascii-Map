@@ -15,9 +15,9 @@ type runResult struct {
 	elapsed  time.Duration // informational only - see scoring.go's doc comment for why this no longer feeds the score
 	cpuTime  time.Duration // informational only - see scoring.go's doc comment for why this no longer feeds the score
 	memBytes int64
-	allocs   int64 // heap allocation count (runtime.MemStats.Mallocs delta) - deterministic, feeds the score
-	ops      int   // search effort: len(Solution.Edges) - deterministic, informational (see scoring.go for why this doesn't feed the score - span does)
-	span     int   // critical-path length: Solution.Span, or ops itself for a solver that leaves Span unset - deterministic, feeds the score
+	allocs   int64 // heap allocation count (runtime.MemStats.Mallocs delta) - deterministic score input
+	ops      int   // search effort: len(Solution.Edges) - deterministic score input
+	span     int   // critical-path length: Solution.Span, or ops when unset; informational only
 	primOps  int64 // deterministic CPU-cost proxy: Solution.PrimOps - feeds the score, see that field's doc comment
 	steps    int   // moves taken (path cell count - 1)
 
@@ -300,7 +300,7 @@ func printPanelsOrSummary(results []runResult, summaryOnly bool, consoleWidth in
 func printLeaderboard(title string, results []runResult) {
 	scored := scoreResults(results)
 
-	fmt.Printf("--- %s (score = geometric mean of steps/span/primOps/allocs/mem ratios vs. the best on this maze; 1.0 = best in everything, smallest first; ops/time/cpu below are informational only - see scoring.go) ---\n", title)
+	fmt.Printf("--- %s (score = geometric mean of steps/ops/primOps/allocs/mem ratios vs. the best on this maze; 1.0 = best in everything, smallest first; span/time/cpu below are informational only - see scoring.go) ---\n", title)
 
 	if len(scored) > 0 {
 		minSteps := scored[0].steps
@@ -327,8 +327,8 @@ func printLeaderboard(title string, results []runResult) {
 	}
 
 	for i, r := range scored {
-		fmt.Printf("%2d. %-20s score %6.2f   %6d steps   %6d span   %8d primOps   %6d allocs   mem %10s   (ops %d, time %s, cpu %s)\n",
-			i+1, r.name, r.score, r.steps, r.span, r.primOps, r.allocs, formatBytes(r.memBytes), r.ops, r.elapsed, r.cpuTime)
+		fmt.Printf("%2d. %-20s score %6.2f   %6d steps   %6d ops   %8d primOps   %6d allocs   mem %10s   (span %d, time %s, cpu %s)\n",
+			i+1, r.name, r.score, r.steps, r.ops, r.primOps, r.allocs, formatBytes(r.memBytes), r.span, r.elapsed, r.cpuTime)
 	}
 	disqualified := len(results) - len(scored)
 	if disqualified > 0 {
@@ -348,8 +348,8 @@ type aggregate struct {
 	name       string
 	avgScore   float64
 	avgSteps   float64
-	avgOps     float64 // total work; informational only - see scoring.go
-	avgSpan    float64
+	avgOps     float64 // total work; deterministic score input
+	avgSpan    float64 // informational only
 	avgPrimOps float64 // deterministic CPU-cost proxy - feeds the score, see Solution.PrimOps
 	avgAllocs  float64
 	avgMem     float64
@@ -394,10 +394,10 @@ func runBenchmark(summaryOnly bool, consoleWidthOverride int, consoleRoutes bool
 
 		agg := aggregateScores(runsBySeed)
 
-		fmt.Printf("=== %dx%d - average score across all %d seeds (score = geometric mean of steps/span/primOps/allocs/mem ratios vs. the best on each maze; smallest first; ops/time/cpu below are informational only - see scoring.go) ===\n", tier.width, tier.height, len(BenchmarkSeeds))
+		fmt.Printf("=== %dx%d - average score across all %d seeds (score = geometric mean of steps/ops/primOps/allocs/mem ratios vs. the best on each maze; smallest first; span/time/cpu below are informational only - see scoring.go) ===\n", tier.width, tier.height, len(BenchmarkSeeds))
 		for i, a := range agg {
-			fmt.Printf("%2d. %-20s avg score %6.2f   avg %6.1f steps   avg %7.1f span   avg %9.1f primOps   avg %7.1f allocs   avg mem %10s   won %d/%d   (avg ops %.1f, avg time %s, avg cpu %s)\n",
-				i+1, a.name, a.avgScore, a.avgSteps, a.avgSpan, a.avgPrimOps, a.avgAllocs, formatBytes(int64(a.avgMem)), a.wins, a.runs, a.avgOps, a.avgTime, a.avgCPU)
+			fmt.Printf("%2d. %-20s avg score %6.2f   avg %6.1f steps   avg %7.1f ops   avg %9.1f primOps   avg %7.1f allocs   avg mem %10s   won %d/%d   (avg span %.1f, avg time %s, avg cpu %s)\n",
+				i+1, a.name, a.avgScore, a.avgSteps, a.avgOps, a.avgPrimOps, a.avgAllocs, formatBytes(int64(a.avgMem)), a.wins, a.runs, a.avgSpan, a.avgTime, a.avgCPU)
 		}
 		fmt.Println()
 
