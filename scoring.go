@@ -6,9 +6,9 @@ import (
 )
 
 // scoredResult attaches a combined score to a run: the geometric mean of
-// five ratios - steps, ops (total discovery work), primOps (a
-// deterministic CPU-cost proxy), allocation count (allocs), and memory
-// allocated (mem) - each normalized against whichever algorithm did best
+// six ratios - steps, ops (total discovery work), primOps (a deterministic
+// CPU-cost proxy), allocation count (allocs), memory allocated (mem), and
+// span (critical-path depth) - each normalized against whichever algorithm did best
 // in that ONE dimension on THIS maze. 1.0 means "matched the best in
 // every dimension on this maze"; higher is worse.
 //
@@ -34,12 +34,11 @@ import (
 // entirely invisible to allocs/mem/ops alone (see Solution.PrimOps for
 // the exact, deterministic accounting).
 //
-// Span is deliberately not scored. It is an ideal dependency-depth model,
-// not the total work actually performed; it omits worker startup and real
-// synchronization overhead. Ops (len(Edges)) charges every discovery,
-// regardless of whether it ran serially or concurrently. Span remains
-// exported solely to make concurrent discovery generations visible in the
-// animation.
+// Span is scored at half the weight of every other dimension. It is an ideal
+// dependency-depth model, not the total work actually performed; it omits
+// worker startup and real synchronization overhead. Ops (len(Edges)) still
+// charges every discovery, regardless of whether it ran serially or
+// concurrently, so a wide but wasteful search cannot make its work free.
 //
 // Normalizing against the best-per-maze, rather than using raw absolute
 // numbers, is what makes a route that's short-but-wasteful and a route
@@ -55,11 +54,18 @@ type scoredResult struct {
 	runResult
 	stepsRatio   float64
 	opsRatio     float64
+	spanRatio    float64
 	primOpsRatio float64
 	allocsRatio  float64
 	memRatio     float64
 	score        float64
 }
+
+const (
+	standardScoreWeight = 1.0
+	spanScoreWeight     = 0.5
+	totalScoreWeight    = 5*standardScoreWeight + spanScoreWeight
+)
 
 // scoreResults scores every valid (non-disqualified) result, sorted
 // smallest score (best) first, ties broken by raw ops (itself
@@ -75,13 +81,16 @@ func scoreResults(results []runResult) []scoredResult {
 		return nil
 	}
 
-	bestSteps, bestOps, bestPrimOps, bestAllocs, bestMem := valid[0].steps, valid[0].ops, valid[0].primOps, valid[0].allocs, valid[0].memBytes
+	bestSteps, bestOps, bestSpan, bestPrimOps, bestAllocs, bestMem := valid[0].steps, valid[0].ops, valid[0].span, valid[0].primOps, valid[0].allocs, valid[0].memBytes
 	for _, r := range valid[1:] {
 		if r.steps < bestSteps {
 			bestSteps = r.steps
 		}
 		if r.ops < bestOps {
 			bestOps = r.ops
+		}
+		if r.span < bestSpan {
+			bestSpan = r.span
 		}
 		if r.primOps < bestPrimOps {
 			bestPrimOps = r.primOps
@@ -103,6 +112,9 @@ func scoreResults(results []runResult) []scoredResult {
 	if bestOps < 1 {
 		bestOps = 1
 	}
+	if bestSpan < 1 {
+		bestSpan = 1
+	}
 	if bestPrimOps < 1 {
 		bestPrimOps = 1
 	}
@@ -115,12 +127,15 @@ func scoreResults(results []runResult) []scoredResult {
 
 	scored := make([]scoredResult, len(valid))
 	for i, r := range valid {
-		steps, ops, primOps, allocs, mem := r.steps, r.ops, r.primOps, r.allocs, r.memBytes
+		steps, ops, span, primOps, allocs, mem := r.steps, r.ops, r.span, r.primOps, r.allocs, r.memBytes
 		if steps < 1 {
 			steps = 1
 		}
 		if ops < 1 {
 			ops = 1
+		}
+		if span < 1 {
+			span = 1
 		}
 		if primOps < 1 {
 			primOps = 1
@@ -134,6 +149,7 @@ func scoreResults(results []runResult) []scoredResult {
 
 		stepsRatio := float64(steps) / float64(bestSteps)
 		opsRatio := float64(ops) / float64(bestOps)
+		spanRatio := float64(span) / float64(bestSpan)
 		primOpsRatio := float64(primOps) / float64(bestPrimOps)
 		allocsRatio := float64(allocs) / float64(bestAllocs)
 		memRatio := float64(mem) / float64(bestMem)
@@ -142,14 +158,22 @@ func scoreResults(results []runResult) []scoredResult {
 			runResult:    r,
 			stepsRatio:   stepsRatio,
 			opsRatio:     opsRatio,
+			spanRatio:    spanRatio,
 			primOpsRatio: primOpsRatio,
 			allocsRatio:  allocsRatio,
 			memRatio:     memRatio,
-			// Geometric mean of the five ratios: equal weight per
-			// dimension, and - unlike a raw product - stays on the same
-			// human-readable scale as the ratios themselves (2.0 means
-			// "twice as bad overall", not "thirty-two times as bad").
-			score: math.Pow(stepsRatio*opsRatio*primOpsRatio*allocsRatio*memRatio, 1.0/5.0),
+			// Weighted geometric mean: span is included, but its 0.5
+			// exponent gives it half the influence of the five standard
+			// dimensions. Unlike a raw product, it stays on the same
+			// human-readable scale as the ratios themselves.
+			score: math.Pow(
+				math.Pow(stepsRatio, standardScoreWeight)*
+					math.Pow(opsRatio, standardScoreWeight)*
+					math.Pow(spanRatio, spanScoreWeight)*
+					math.Pow(primOpsRatio, standardScoreWeight)*
+					math.Pow(allocsRatio, standardScoreWeight)*
+					math.Pow(memRatio, standardScoreWeight),
+				1.0/totalScoreWeight),
 		}
 	}
 	sort.Slice(scored, func(i, j int) bool {
