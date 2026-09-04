@@ -354,6 +354,17 @@ func runBrenThreadLeg(neighbors [][]flatEdge, cellOf []Cell, n, maxDist int, src
 // reconstruction above) but the function stays here since both solvers
 // share this file's flat-graph helpers.
 func bfsOverGraphFlat(graph [][]int32, cellAt func(int32) Cell, src, dst int32) (path []Cell, edges []Edge, primOps int64) {
+	return bfsOverGraphFlatInternal(graph, cellAt, src, dst, false)
+}
+
+// bfsOverGraphFlatWithDepth is the same optimal BFS, but retains its BFS
+// generation on each discovery edge for a caller that actually runs search
+// trees concurrently.
+func bfsOverGraphFlatWithDepth(graph [][]int32, cellAt func(int32) Cell, src, dst int32) (path []Cell, edges []Edge, primOps int64) {
+	return bfsOverGraphFlatInternal(graph, cellAt, src, dst, true)
+}
+
+func bfsOverGraphFlatInternal(graph [][]int32, cellAt func(int32) Cell, src, dst int32, recordDepth bool) (path []Cell, edges []Edge, primOps int64) {
 	n := len(graph)
 	visitedFlag := make([]bool, n)
 	parent := make([]int32, n)
@@ -363,7 +374,12 @@ func bfsOverGraphFlat(graph [][]int32, cellAt func(int32) Cell, src, dst int32) 
 	visitedFlag[src] = true
 	queue := make([]int32, 0, n)
 	queue = append(queue, src)
+	// A BFS discovery tree has at most one edge per non-root vertex. Both
+	// HangeonOptimized and V3 export this whole tree, so growing the slice a
+	// few elements at a time only creates short-lived backing arrays.
+	edges = make([]Edge, 0, n-1)
 
+	depth, levelEnd := 0, 1
 	for head := 0; head < len(queue); head++ {
 		cur := queue[head]
 		if cur == dst {
@@ -374,9 +390,17 @@ func bfsOverGraphFlat(graph [][]int32, cellAt func(int32) Cell, src, dst int32) 
 			if !visitedFlag[next] {
 				visitedFlag[next] = true
 				parent[next] = cur
-				edges = append(edges, Edge{From: cellAt(cur), To: cellAt(next)})
+				edge := Edge{From: cellAt(cur), To: cellAt(next)}
+				if recordDepth {
+					edge.Depth = depth + 1
+				}
+				edges = append(edges, edge)
 				queue = append(queue, next)
 			}
+		}
+		if head+1 == levelEnd {
+			levelEnd = len(queue)
+			depth++
 		}
 	}
 	return nil, edges, primOps // unreachable; shouldn't happen for a generator-verified maze

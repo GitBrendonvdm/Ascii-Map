@@ -1285,6 +1285,29 @@
             ctx.stroke();
             ctx.globalAlpha = 1;
 
+            // The just-discovered generation is deliberately brighter than
+            // the already-settled tree. This makes a solver such as
+            // BrenThread read as several simultaneous branches rather than
+            // one long, serially drawn route.
+            if (activeProgress > 0 && activeWave <= st.maxWave) {
+                ctx.strokeStyle = getCssVar('--accent');
+                ctx.lineWidth = Math.max(2, cs * 0.18);
+                ctx.globalAlpha = 0.95;
+                ctx.beginPath();
+                for (var activeIndex = 0; activeIndex < totalEdges; activeIndex++) {
+                    if (st.waves[activeIndex] !== activeWave) continue;
+                    var activeEdge = st.edges[activeIndex];
+                    var activeTrigger = st.tpPartner[activeEdge.to.x + ',' + activeEdge.to.y];
+                    var activeTo = activeTrigger || activeEdge.to;
+                    var activeFromX = activeEdge.from.x * cs + cs / 2, activeFromY = activeEdge.from.y * cs + cs / 2;
+                    var activeToX = activeTo.x * cs + cs / 2, activeToY = activeTo.y * cs + cs / 2;
+                    ctx.moveTo(activeFromX, activeFromY);
+                    ctx.lineTo(activeFromX + (activeToX - activeFromX) * activeProgress, activeFromY + (activeToY - activeFromY) * activeProgress);
+                }
+                ctx.stroke();
+                ctx.globalAlpha = 1;
+            }
+
             if (teleportEdgeSegs.length) {
                 ctx.strokeStyle = getCssVar('--trail');
                 ctx.setLineDash([Math.max(2, cs * 0.18), Math.max(2, cs * 0.18)]);
@@ -1349,15 +1372,17 @@
             ctx.setLineDash([]);
         }
 
-        updateReadout(st, progress, edgesShown, pathShown);
+        updateReadout(st, progress, edgesShown, pathShown, completedWave, activeWave, activeProgress);
     }
 
-    function updateReadout(st, progress, edgesShown, pathShown) {
+    function updateReadout(st, progress, edgesShown, pathShown, completedWave, activeWave, activeProgress) {
         var r = st.result;
         var liveSteps = Math.max(0, pathShown - 1);
         var html = '';
         html += '<div class="label">Steps</div><div class="live">' + liveSteps + ' / ' + r.steps + '</div>';
         html += '<div class="label">Span</div><div class="live">' + (r.spanCount != null ? r.spanCount : '&mdash;') + '</div>';
+        var wave = activeProgress > 0 && activeWave <= st.maxWave ? activeWave + ' / ' + st.maxWave : (completedWave >= st.maxWave ? 'complete' : '—');
+        html += '<div class="label">Active wave</div><div class="live">' + wave + '</div>';
         html += '<div class="label">PrimOps</div><div class="live">' + (r.primOpsCount != null ? r.primOpsCount : '&mdash;') + '</div>';
         html += '<div class="label">Allocs</div><div class="live">' + (r.allocsCount != null ? r.allocsCount : '&mdash;') + '</div>';
         html += '<div class="label">Mem</div><div class="live">' + formatBytes(r.memBytes) + '</div>';
