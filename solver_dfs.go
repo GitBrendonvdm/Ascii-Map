@@ -16,16 +16,17 @@ type DFSSolver struct{}
 func (DFSSolver) Name() string { return "DFS" }
 
 func (DFSSolver) Solve(m *Maze) Solution {
-	leg1, visited1, edges1 := dfsPath(m, m.Start, m.Key)
-	leg2, visited2, edges2 := dfsPath(m, m.Key, m.Exit)
+	leg1, visited1, edges1, primOps1 := dfsPath(m, m.Start, m.Key)
+	leg2, visited2, edges2, primOps2 := dfsPath(m, m.Key, m.Exit)
 	return Solution{
 		Path:    joinLegs(leg1, leg2),
 		Visited: append(visited1, visited2...),
 		Edges:   append(edges1, edges2...),
+		PrimOps: primOps1 + primOps2,
 	}
 }
 
-func dfsPath(m *Maze, src, dst Cell) (path, visited []Cell, edges []Edge) {
+func dfsPath(m *Maze, src, dst Cell) (path, visited []Cell, edges []Edge, primOps int64) {
 	lookup := m.TeleportLookup()
 
 	type frame struct {
@@ -38,7 +39,7 @@ func dfsPath(m *Maze, src, dst Cell) (path, visited []Cell, edges []Edge) {
 	stack := []frame{{cell: src}}
 
 	if src == dst {
-		return []Cell{src}, visitedSlice(visitedSet), edges
+		return []Cell{src}, visitedSlice(visitedSet), edges, primOps
 	}
 
 	for len(stack) > 0 {
@@ -49,6 +50,7 @@ func dfsPath(m *Maze, src, dst Cell) (path, visited []Cell, edges []Edge) {
 		}
 		dir := allDirections[top.dirIdx]
 		top.dirIdx++
+		primOps++ // every direction checked, open or not, is a real primitive op - see Solution.PrimOps
 
 		if !m.isOpen(top.cell, dir) {
 			continue
@@ -64,9 +66,9 @@ func dfsPath(m *Maze, src, dst Cell) (path, visited []Cell, edges []Edge) {
 		parent[landing] = top.cell
 		edges = append(edges, Edge{From: top.cell, To: landing})
 		if landing == dst {
-			return reconstructPath(parent, src, dst), visitedSlice(visitedSet), edges
+			return reconstructPath(parent, src, dst), visitedSlice(visitedSet), edges, primOps
 		}
 		stack = append(stack, frame{cell: landing})
 	}
-	return nil, visitedSlice(visitedSet), edges // unreachable; shouldn't happen for a generator-verified maze
+	return nil, visitedSlice(visitedSet), edges, primOps // unreachable; shouldn't happen for a generator-verified maze
 }

@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Ascii-Maze Results Viewer</title>
 <style>
     :root {
@@ -30,9 +31,11 @@
         background: var(--bg);
         color: var(--text);
         height: 100vh;
+        height: 100dvh;
         display: flex;
         flex-direction: column;
         overflow: hidden;
+        -webkit-tap-highlight-color: transparent;
     }
     .mono { font-family: Consolas, "Cascadia Mono", monospace; }
     header {
@@ -100,12 +103,16 @@
     .maze-item:hover { background: var(--panel-alt); }
     .maze-item.active { background: var(--panel-alt); border-color: var(--accent); }
     .maze-item .style { color: var(--text-dim); }
+    .maze-toolbar { display: flex; gap: 6px; padding: 2px 2px 8px; }
+    .maze-toolbar button { flex: 1; font-size: 11px; padding: 5px; }
     table { width: 100%; border-collapse: collapse; font-size: 11px; }
     th, td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--border); white-space: nowrap; }
     th { color: var(--text-dim); font-weight: 500; cursor: pointer; position: sticky; top: 0; background: var(--panel); }
     th:hover { color: var(--accent); }
     tr.hl { background: rgba(77, 163, 255, 0.12); }
     tr.dq td { color: var(--bad); opacity: 0.7; }
+    #tabBoard tbody tr { cursor: pointer; }
+    #tabBoard tbody tr:hover { background: var(--panel-alt); }
     main { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
     .controls {
         display: flex;
@@ -208,13 +215,81 @@
     .doc-card-body code { font-family: Consolas, monospace; background: var(--panel-alt); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
     .doc-card-close { background: transparent; border: none; color: var(--text-dim); font-size: 20px; cursor: pointer; line-height: 1; padding: 2px 6px; }
     .doc-card-close:hover { color: var(--text); }
+
+    .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+    .menu-btn {
+        display: none;
+        background: var(--panel-alt);
+        border: 1px solid var(--border);
+        color: var(--text);
+        border-radius: 6px;
+        font-size: 16px;
+        line-height: 1;
+        padding: 8px 10px;
+        cursor: pointer;
+        flex-shrink: 0;
+    }
+    .menu-btn:hover { border-color: var(--accent); }
+
+    .sidebar-backdrop {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.5);
+        z-index: 55;
+    }
+
+    /* Below this width the two-pane desktop layout (a 300px-wide aside
+       permanently beside main) leaves main - the actual maze animations,
+       the entire point of this page - with almost no room at all. The
+       aside becomes an off-canvas drawer instead, so main gets the full
+       screen the instant data loads, exactly like the narrow fixed-width
+       strip it already is on desktop. */
+    @media (max-width: 820px) {
+        .menu-btn { display: inline-flex; align-items: center; justify-content: center; touch-action: manipulation; }
+        .sidebar-backdrop.show { display: block; }
+
+        header { flex-wrap: wrap; row-gap: 6px; padding: 10px 12px; }
+        header h1 { font-size: 13px; max-width: 46vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        header .status { flex-basis: 100%; order: 3; white-space: normal; font-size: 11px; }
+
+        aside {
+            position: fixed;
+            top: 0;
+            bottom: 0;
+            left: 0;
+            width: min(86vw, 340px);
+            z-index: 60;
+            transform: translateX(-100%);
+            transition: transform 0.25s ease;
+            box-shadow: 4px 0 24px rgba(0, 0, 0, 0.5);
+        }
+        aside.open { transform: translateX(0); }
+
+        .controls { gap: 10px; padding: 10px 12px; }
+        .controls input[type=range] { width: 100px; }
+
+        button, .filebtn, select { padding: 9px 14px; font-size: 13px; min-height: 40px; touch-action: manipulation; }
+        .tabs button { min-height: 44px; }
+        .chip { padding: 8px 12px; font-size: 12px; min-height: 32px; display: inline-flex; align-items: center; touch-action: manipulation; }
+        .maze-item { padding: 12px 10px; font-size: 13px; }
+        .info-btn { width: 26px; height: 26px; font-size: 14px; }
+
+        .panels { grid-template-columns: 1fr; padding: 10px; gap: 10px; }
+        .empty .drop { padding: 24px 20px; }
+        .doc-overlay { padding: 10px; }
+        .doc-card-body { font-size: 14px; }
+    }
 </style>
 </head>
 <body>
 
 <header>
+    <button class="menu-btn" id="menuBtn" aria-label="Open menu" title="Mazes / leaderboard / algorithms">&#9776;</button>
     <h1>Ascii-Maze &mdash; Results Viewer</h1>
     <div class="status mono" id="status">No data loaded.</div>
+    <select id="sizeSelect" title="Switch to a different benchmark size tier already in the loaded file"></select>
     <label class="filebtn" for="fileInput">Open JSON&hellip;</label>
     <input type="file" id="fileInput" accept=".json">
 </header>
@@ -238,6 +313,7 @@
         <div class="tabpane" id="tabBoard" style="display:none"></div>
         <div class="tabpane" id="tabDocs" style="display:none"></div>
     </aside>
+    <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
 
     <main id="mainArea" style="display:none">
         <div class="controls">
@@ -253,8 +329,15 @@
             <div class="group">
                 Mode
                 <select id="modeSelect">
-                    <option value="proportional">Proportional speed (by span)</option>
+                    <option value="proportional">Proportional speed</option>
                     <option value="sync">Sync finish (compare routes)</option>
+                </select>
+            </div>
+            <div class="group">
+                View
+                <select id="viewModeSelect">
+                    <option value="byMaze">By map (compare algorithms)</option>
+                    <option value="byAlgorithm">By algorithm (compare maps)</option>
                 </select>
             </div>
         </div>
@@ -266,7 +349,8 @@
             <span><i style="background:var(--path)"></i>Path taken</span>
             <span><i style="background:var(--trail)"></i>Search tree (grows in real discovery order)</span>
             <span><i style="background:var(--visited)"></i>Dead end (a branch that didn't lead anywhere useful)</span>
-            <span><i style="background:var(--teleport-line)"></i>Teleport jump (dotted)</span>
+            <span><i style="background:var(--teleport-line)"></i>Teleport jump on final path (dotted)</span>
+            <span><i style="background:var(--trail)"></i>Teleport jump in search tree (dotted)</span>
             <span>Teleporters share a color + letter per pair</span>
         </div>
         <div class="panels" id="panels"></div>
@@ -288,11 +372,24 @@
     'use strict';
 
     // ---------- state ----------
-    var data = null;
-    var mazes = [];
+    var data = null;             // header only (formatVersion/generatedAt/directionBits/sizeIndex/overall leaderboard) - see loadHeader
+    var mazes = [];               // the currently streamed-in size tier's mazes only - see setActiveSize
+    var activeGroupLeaderboard = null; // the currently streamed-in size tier's own leaderboard - see setActiveSize/renderLeaderboard
+    var currentReaderFactory = null;   // re-invoked fresh (byte 0) by every setActiveSize call - see streamNDJSONLine
+    var activeSizeIndex = 0;
+    var lastFilename = '';      // for the status line across a Size switch
     var activeMazeIndex = 0;
     var selectedAlgorithms = new Set();
     var algorithmSelectionInitialized = false; // becomes true once a default selection has been picked, so switching mazes never silently overwrites the user's own choice of algorithms to compare
+    // viewMode picks what a "panel" represents: 'byMaze' is the original
+    // shape (one map, every chosen algorithm's solve of it, panels sorted
+    // by score) - 'byAlgorithm' flips that around (one chosen algorithm,
+    // its solve of every chosen map), for comparing how a single algorithm
+    // behaves across different maze layouts/sizes instead of comparing
+    // algorithms against each other on one layout.
+    var viewMode = 'byMaze';
+    var selectedMazeIndices = new Set(); // byAlgorithm mode only - which of `mazes` to show panels for
+    var selectedSingleAlgorithm = null;  // byAlgorithm mode only
     var playing = false;
     var playStart = 0;      // performance.now() timestamp the current play began
     var pausedAt = 0;       // ms of animation progress already consumed when paused
@@ -378,6 +475,24 @@
     docOverlay.addEventListener('click', function (e) { if (e.target === docOverlay) closeDoc(); });
     document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeDoc(); });
 
+    // ---------- mobile sidebar drawer ----------
+    // Below the 820px breakpoint (see CSS) `aside` becomes a slide-in
+    // drawer instead of a permanent 300px-wide column, so `main` - the
+    // actual maze animations - gets the full screen by default. Toggling
+    // is pure CSS (a `.open` class flips `transform`); this just owns
+    // when that class is on. Inert above the breakpoint: menuBtn is
+    // display:none there, so nothing ever calls openSidebar to begin with.
+    var sidebarEl = document.getElementById('sidebar');
+    var sidebarBackdrop = document.getElementById('sidebarBackdrop');
+    var menuBtn = document.getElementById('menuBtn');
+    function openSidebar() { sidebarEl.classList.add('open'); sidebarBackdrop.classList.add('show'); }
+    function closeSidebar() { sidebarEl.classList.remove('open'); sidebarBackdrop.classList.remove('show'); }
+    menuBtn.addEventListener('click', function () {
+        if (sidebarEl.classList.contains('open')) closeSidebar(); else openSidebar();
+    });
+    sidebarBackdrop.addEventListener('click', closeSidebar);
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeSidebar(); });
+
     function renderDocsList() {
         var el = document.getElementById('tabDocs');
         el.innerHTML = '';
@@ -410,6 +525,71 @@
         if (f) readFile(f);
     });
 
+    // streamNDJSONLine reads a fresh stream (readerFactory() is invoked
+    // exactly once, and must return a *new* reader starting at byte 0 every
+    // time it's called - see urlReaderFactory/fileReaderFactory below),
+    // decoding UTF-8 incrementally and splitting on '\n', and resolves with
+    // the full text of exactly one line (0-indexed) - see
+    // jsonExportHeader/jsonSizeGroup in export.go for what line 0 and every
+    // line after it actually contain. Every earlier line is discarded the
+    // instant its own newline is found - never accumulated past its own
+    // single line - and the underlying read is cancelled the moment the
+    // target line is found, so nothing past it is ever transferred or held
+    // in memory. Peak memory during one call is bounded by the size of the
+    // single largest line encountered (the target line, or an earlier
+    // discarded one if that happened to be bigger), never the sum of every
+    // line in the file - this is what keeps a many-hundred-MB combined
+    // export safe to load: the viewer only ever holds roughly one size
+    // tier's worth of data at a time, however many tiers the file has.
+    function streamNDJSONLine(readerFactory, targetLineIndex) {
+        return readerFactory().then(function (reader) {
+            var decoder = new TextDecoder('utf-8');
+            var lineIndex = 0;
+            var partial = '';
+            function pump() {
+                return reader.read().then(function (chunk) {
+                    var text = chunk.value ? decoder.decode(chunk.value, { stream: true }) : decoder.decode();
+                    var from = 0;
+                    for (;;) {
+                        var nl = text.indexOf('\n', from);
+                        if (nl === -1) {
+                            partial += text.slice(from);
+                            break;
+                        }
+                        var line = partial + text.slice(from, nl);
+                        partial = '';
+                        if (lineIndex === targetLineIndex) {
+                            reader.cancel().catch(function () {});
+                            return line;
+                        }
+                        lineIndex++;
+                        from = nl + 1;
+                    }
+                    if (chunk.done) {
+                        throw new Error('only found ' + lineIndex + ' line(s), expected at least ' + (targetLineIndex + 1));
+                    }
+                    return pump();
+                });
+            }
+            return pump().finally(function () {
+                try { reader.releaseLock(); } catch (e) { /* already released by cancel() above */ }
+            });
+        });
+    }
+
+    function urlReaderFactory(url) {
+        return function () {
+            return fetch(url).then(function (res) {
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                return res.body.getReader();
+            });
+        };
+    }
+
+    function fileReaderFactory(file) {
+        return function () { return Promise.resolve(file.stream().getReader()); };
+    }
+
     // This viewer is meant to sit right next to the JSON file maze.exe just
     // wrote (bench_results.json for -bench, maze_result.json otherwise), so
     // try loading one automatically before ever falling back to a manual
@@ -425,69 +605,183 @@
         var candidates = ['bench_results.json', 'maze_result.json'];
         function tryNext(i) {
             if (i >= candidates.length) return; // nothing loaded - leave the manual UI as-is
-            fetch(candidates[i]).then(function (res) {
-                if (!res.ok) throw new Error('not found');
-                return res.json();
-            }).then(function (parsed) {
-                loadData(parsed, candidates[i]);
-            }).catch(function () {
+            loadHeader(urlReaderFactory(candidates[i]), candidates[i]).catch(function () {
                 tryNext(i + 1);
             });
         }
         tryNext(0);
     })();
 
+    // ---------- size selector ----------
+    // Every tier lives in the one loaded file, but only ONE tier's mazes
+    // are ever actually in memory at a time (see setActiveSize) - so
+    // switching here re-streams the target tier's own line fresh.
+    document.getElementById('sizeSelect').addEventListener('change', function (e) {
+        if (!data || !currentReaderFactory) return;
+        setActiveSize(parseInt(e.target.value, 10));
+    });
+
     function readFile(file) {
         status.textContent = 'Loading ' + file.name + '...';
-        var reader = new FileReader();
-        reader.onload = function () {
-            try {
-                var parsed = JSON.parse(reader.result);
-                loadData(parsed, file.name);
-            } catch (err) {
-                status.textContent = 'Failed to parse ' + file.name + ': ' + err.message;
-            }
-        };
-        reader.onerror = function () { status.textContent = 'Failed to read ' + file.name; };
-        reader.readAsText(file);
+        loadHeader(fileReaderFactory(file), file.name).catch(function (err) {
+            status.textContent = 'Failed to load ' + file.name + ': ' + err.message;
+        });
     }
 
-    function loadData(parsed, filename) {
-        if (!parsed || !Array.isArray(parsed.mazes) || parsed.mazes.length === 0) {
-            status.textContent = filename + ': no mazes found in file.';
-            return;
-        }
-        if (parsed.formatVersion !== 5) {
-            status.textContent = filename + ': unrecognized formatVersion ' + parsed.formatVersion + ' (viewer expects 5) - reload after rebuilding maze.exe.';
-        }
-        data = parsed;
-        mazes = parsed.mazes;
-        activeMazeIndex = 0;
-        algorithmSelectionInitialized = false; // fresh file -> pick a sensible default again, don't carry over an unrelated file's selection
-        DIR = parsed.directionBits || DIR;
-        status.textContent = filename + ' - ' + mazes.length + ' maze(s), generated ' + (parsed.generatedAt || 'unknown time');
+    // loadHeader reads just line 0 - the small header (see
+    // jsonExportHeader in export.go: formatVersion/generatedAt/
+    // directionBits/sizeIndex/the overall leaderboard, deliberately no
+    // maze data) - safe to read and parse whole every time, then kicks off
+    // streaming in the default (first) size tier.
+    function loadHeader(readerFactory, sourceName) {
+        return streamNDJSONLine(readerFactory, 0).then(function (headerText) {
+            var parsed = JSON.parse(headerText);
+            if (!parsed || !Array.isArray(parsed.sizeIndex) || parsed.sizeIndex.length === 0) {
+                throw new Error('no size tiers found in file');
+            }
+            if (parsed.formatVersion !== 8) {
+                status.textContent = sourceName + ': unrecognized formatVersion ' + parsed.formatVersion + ' (viewer expects 8) - reload after rebuilding maze.exe.';
+            }
+            data = parsed;
+            currentReaderFactory = readerFactory;
+            lastFilename = sourceName;
+            DIR = parsed.directionBits || DIR;
 
-        document.getElementById('emptyState').style.display = 'none';
-        document.getElementById('sidebar').style.display = 'flex';
-        document.getElementById('mainArea').style.display = 'flex';
+            var sizeSelect = document.getElementById('sizeSelect');
+            sizeSelect.innerHTML = '';
+            data.sizeIndex.forEach(function (g, i) {
+                var opt = document.createElement('option');
+                opt.value = i;
+                opt.textContent = g.width + '×' + g.height;
+                sizeSelect.appendChild(opt);
+            });
 
-        renderMazeList();
-        renderLeaderboard();
-        renderDocsList();
-        selectMaze(0);
+            document.getElementById('emptyState').style.display = 'none';
+            document.getElementById('sidebar').style.display = 'flex';
+            document.getElementById('mainArea').style.display = 'flex';
+            renderDocsList();
+
+            return setActiveSize(0);
+        });
+    }
+
+    // setActiveSize streams in data.sizeIndex[i]'s own group line (line
+    // 1+i, since line 0 is the header - see streamNDJSONLine) and points
+    // `mazes` at it, discarding whatever tier was active before - the
+    // viewer never holds more than one tier's mazes in memory at once,
+    // even though every tier lives in the one loaded file. Every call
+    // re-reads the source from the start via currentReaderFactory, which
+    // does mean re-transferring bytes for whatever's already been streamed
+    // past on a later tier - a real cost, but a bandwidth/time one, not a
+    // memory one, and it's what keeps the memory bound genuinely true no
+    // matter which tier or how many times it's switched.
+    function setActiveSize(i) {
+        var meta = data.sizeIndex[i];
+        activeSizeIndex = i;
+        document.getElementById('sizeSelect').value = i;
+        document.getElementById('sizeSelect').disabled = true;
+        status.textContent = 'Loading ' + meta.width + '×' + meta.height + '...';
+
+        return streamNDJSONLine(currentReaderFactory, 1 + i).then(function (line) {
+            var group = JSON.parse(line);
+            mazes = group.mazes;
+            activeGroupLeaderboard = group.leaderboard; // this tier's own leaderboard - see renderLeaderboard
+            algorithmSelectionInitialized = false; // fresh size -> pick a sensible default again, don't carry over the previous tier's selection
+            viewMode = 'byMaze';
+            document.getElementById('viewModeSelect').value = 'byMaze';
+            selectedMazeIndices = new Set();
+            selectedSingleAlgorithm = null;
+
+            status.textContent = lastFilename + ' - ' + meta.width + '×' + meta.height + ', ' + mazes.length + ' maze(s), generated ' + (data.generatedAt || 'unknown time');
+            document.getElementById('sizeSelect').disabled = false;
+
+            selectMaze(0); // renders the maze list, leaderboard, chips and panels for the new group
+        }).catch(function (err) {
+            status.textContent = 'Failed to load ' + meta.width + '×' + meta.height + ': ' + err.message;
+            document.getElementById('sizeSelect').disabled = false;
+        });
     }
 
     // ---------- sidebar: maze list ----------
+    // In byMaze mode this is a single-select list (click -> that map's
+    // panels). In byAlgorithm mode it becomes a multi-select checklist
+    // (click toggles membership in selectedMazeIndices - "chosen maps" for
+    // the one algorithm currently picked in algoChips), with an All/None
+    // toolbar since picking through 10 mazes one at a time is tedious.
     function renderMazeList() {
         var el = document.getElementById('tabMazes');
         el.innerHTML = '';
+        if (viewMode === 'byAlgorithm') {
+            var toolbar = document.createElement('div');
+            toolbar.className = 'maze-toolbar';
+            var allBtn = document.createElement('button');
+            allBtn.type = 'button';
+            allBtn.textContent = 'All';
+            allBtn.addEventListener('click', function () {
+                mazes.forEach(function (_, i) { selectedMazeIndices.add(i); });
+                renderMazeList();
+                refreshPanelsPreservingPlayback();
+            });
+            var noneBtn = document.createElement('button');
+            noneBtn.type = 'button';
+            noneBtn.textContent = 'None';
+            noneBtn.addEventListener('click', function () {
+                selectedMazeIndices.clear();
+                renderMazeList();
+                refreshPanelsPreservingPlayback();
+            });
+            toolbar.appendChild(allBtn);
+            toolbar.appendChild(noneBtn);
+            el.appendChild(toolbar);
+        }
         mazes.forEach(function (m, i) {
             var div = document.createElement('div');
-            div.className = 'maze-item' + (i === activeMazeIndex ? ' active' : '');
-            div.innerHTML = '<div>seed=' + m.seed + '</div><div class="style">' + m.style + ' &middot; ' + m.width + '&times;' + m.height + ' &middot; ' + m.results.length + ' algos</div>';
-            div.addEventListener('click', function () { selectMaze(i); });
+            var chosen = viewMode === 'byAlgorithm' ? selectedMazeIndices.has(i) : (i === activeMazeIndex);
+            div.className = 'maze-item' + (chosen ? ' active' : '');
+            var mark = viewMode === 'byAlgorithm' ? (chosen ? '☑ ' : '☐ ') : '';
+            div.innerHTML = '<div>' + mark + 'seed=' + m.seed + '</div><div class="style">' + m.style + ' &middot; ' + m.width + '&times;' + m.height + ' &middot; ' + m.results.length + ' algos</div>';
+            div.addEventListener('click', function () {
+                if (viewMode === 'byAlgorithm') {
+                    if (selectedMazeIndices.has(i)) selectedMazeIndices.delete(i);
+                    else selectedMazeIndices.add(i);
+                    renderMazeList();
+                    refreshPanelsPreservingPlayback();
+                } else {
+                    selectMaze(i);
+                }
+            });
             el.appendChild(div);
         });
+    }
+
+    // ---------- view mode ----------
+    document.getElementById('viewModeSelect').addEventListener('change', function (e) {
+        setViewMode(e.target.value);
+    });
+
+    function setViewMode(mode) {
+        viewMode = mode;
+        if (mode === 'byAlgorithm') {
+            // First switch: default to every map selected and whichever
+            // algorithm the leaderboard (or the active map's own chips)
+            // already ranks best, rather than an empty grid the user has
+            // to build up chip by chip.
+            if (selectedMazeIndices.size === 0) {
+                mazes.forEach(function (_, i) { selectedMazeIndices.add(i); });
+            }
+            if (!selectedSingleAlgorithm) {
+                if (data.leaderboard && data.leaderboard.length) {
+                    selectedSingleAlgorithm = data.leaderboard[0].algorithm;
+                } else if (mazes.length) {
+                    var firstValid = mazes[activeMazeIndex].results.filter(function (r) { return r.valid; })[0];
+                    selectedSingleAlgorithm = firstValid ? firstValid.algorithm : null;
+                }
+            }
+        }
+        renderMazeList();
+        renderChips();
+        renderLeaderboard();
+        refreshPanelsPreservingPlayback();
     }
 
     function formatBytes(b) {
@@ -498,28 +792,45 @@
 
     // ---------- sidebar: leaderboard / per-maze table ----------
     var boardSort = { key: 'avgScore', asc: true };
+    // boardMode picks which leaderboard is shown: 'overall' (every maze
+    // run across every size tier - data.leaderboard) or 'size' (just the
+    // active size tier's own 10 seeds - activeGroupLeaderboard, set
+    // whenever setActiveSize streams a new tier in). Both are valid
+    // Score/Wins comparisons (score is
+    // already a ratio against the best algorithm on that exact maze, so it
+    // stays meaningful mixed across sizes) - only the raw steps/span/etc.
+    // averages stop meaning much once sizes are mixed, which the note
+    // below calls out when boardMode is 'overall'.
+    var boardMode = 'size';
 
     function renderLeaderboard() {
         var el = document.getElementById('tabBoard');
+        var sizeMeta = data.sizeIndex && data.sizeIndex[activeSizeIndex];
+        var overallRows = data.leaderboard && data.leaderboard.length ? data.leaderboard : null;
+        var sizeRows = activeGroupLeaderboard && activeGroupLeaderboard.length ? activeGroupLeaderboard : null;
+        var aggRows = boardMode === 'overall' ? (overallRows || sizeRows) : (sizeRows || overallRows);
+
         var rows, cols;
-        if (data.leaderboard && data.leaderboard.length) {
+        if (aggRows) {
             cols = [
                 { key: 'algorithm', label: 'Algo' },
                 { key: 'avgScore', label: 'Score', fmt: function (v) { return v.toFixed(2); } },
                 { key: 'avgSteps', label: 'Steps', fmt: function (v) { return v.toFixed(1); } },
                 { key: 'avgOps', label: 'Ops', fmt: function (v) { return v.toFixed(1); } },
+                { key: 'avgPrimOps', label: 'PrimOps', fmt: function (v) { return v.toFixed(0); } },
                 { key: 'avgAllocs', label: 'Allocs', fmt: function (v) { return v.toFixed(1); } },
                 { key: 'avgMemBytes', label: 'Mem', fmt: formatBytes },
                 { key: 'avgSpan', label: 'Span¹', fmt: function (v) { return v.toFixed(1); } },
                 { key: 'wins', label: 'Wins' }
             ];
-            rows = data.leaderboard.slice();
+            rows = aggRows.slice();
         } else {
             cols = [
                 { key: 'algorithm', label: 'Algo' },
                 { key: 'score', label: 'Score', fmt: function (v) { return v ? v.toFixed(2) : '-'; } },
                 { key: 'steps', label: 'Steps' },
                 { key: 'opsCount', label: 'Ops' },
+                { key: 'primOpsCount', label: 'PrimOps' },
                 { key: 'allocsCount', label: 'Allocs' },
                 { key: 'memBytes', label: 'Mem', fmt: formatBytes },
                 { key: 'spanCount', label: 'Span¹' }
@@ -532,21 +843,42 @@
             return boardSort.asc ? av - bv : bv - av;
         });
 
-        var html = '<table><thead><tr>';
+        var html = '';
+        if (overallRows || sizeRows) {
+            html += '<div class="chips" style="padding:6px 2px 10px;border-bottom:none">';
+            html += '<div class="chip' + (boardMode === 'size' ? ' on' : '') + (!sizeRows ? ' dq' : '') + '" data-board-mode="size">This size' + (sizeMeta ? ' (' + sizeMeta.width + '×' + sizeMeta.height + ')' : '') + '</div>';
+            html += '<div class="chip' + (boardMode === 'overall' ? ' on' : '') + (!overallRows ? ' dq' : '') + '" data-board-mode="overall">Overall (all sizes)</div>';
+            html += '</div>';
+        }
+        html += '<div class="table-scroll"><table><thead><tr>';
         cols.forEach(function (c) { html += '<th data-key="' + c.key + '">' + c.label + '</th>'; });
         html += '</tr></thead><tbody>';
         rows.forEach(function (r) {
             var dq = r.valid === false;
-            html += '<tr class="' + (selectedAlgorithms.has(r.algorithm || r.name) ? 'hl ' : '') + (dq ? 'dq' : '') + '">';
+            var algo = r.algorithm || r.name;
+            var isHl = viewMode === 'byAlgorithm' ? algo === selectedSingleAlgorithm : selectedAlgorithms.has(algo);
+            html += '<tr class="' + (isHl ? 'hl ' : '') + (dq ? 'dq' : '') + '" data-algo="' + algo + '" title="Click to see ' + algo + ' solve every map">';
             cols.forEach(function (c) {
                 var v = r[c.key];
                 html += '<td>' + (dq && c.key !== 'algorithm' ? (c.key === 'algorithm' ? v : '&mdash;') : (c.fmt ? c.fmt(v) : v)) + '</td>';
             });
             html += '</tr>';
         });
-        html += '</tbody></table>';
-        html += '<p class="note">Deterministic efficiency score = geometric mean of Steps/Ops/Allocs/Mem, each ratioed against the best algorithm in that dimension on that maze. All four are deterministic - the same maze solved by the same algorithm produces the same numbers on any machine, every run - which is why wall-clock time and CPU time aren\'t scored. Ops is total discovery work, so a multithreaded solver receives neither a theoretical parallelism bonus nor an arbitrary thread penalty. ¹Span remains visible as an animation/diagnostic measure of discovery-tree depth, but is not part of Score.</p>';
+        html += '</tbody></table></div>';
+        html += '<p class="note">Click a row to see that algorithm solve every map (switches View to "By algorithm").</p>';
+        if (aggRows === overallRows && aggRows) {
+            html += '<p class="note">Overall mixes every size tier together. Score and Wins stay meaningful mixed like this (Score is already a ratio against the best algorithm on that exact maze, not an absolute number), but Steps/Span/PrimOps/Allocs/Mem are simple averages across wildly different maze sizes here, so treat them as rough texture rather than a real number - switch to "This size" for numbers that mean something concrete.</p>';
+        }
+        html += '<p class="note">Score = geometric mean of Steps/Ops/PrimOps/Allocs/Mem, each ratioed against the best algorithm in that dimension on that maze. All five are deterministic, so wall-clock and CPU time are not scored. Ops is total discovery work, while PrimOps deterministically accounts for low-level work such as looping and synchronization. ¹Span is retained only as an animation/diagnostic measure of discovery-tree depth; it is not a score input.</p>';
         el.innerHTML = html;
+        el.querySelectorAll('[data-board-mode]').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                var mode = btn.getAttribute('data-board-mode');
+                if ((mode === 'size' && !sizeRows) || (mode === 'overall' && !overallRows)) return;
+                boardMode = mode;
+                renderLeaderboard();
+            });
+        });
         el.querySelectorAll('th').forEach(function (th) {
             th.addEventListener('click', function () {
                 var key = th.getAttribute('data-key');
@@ -555,6 +887,28 @@
                 renderLeaderboard();
             });
         });
+        el.querySelectorAll('tbody tr').forEach(function (tr) {
+            tr.addEventListener('click', function () { viewAlgorithmAcrossMaps(tr.getAttribute('data-algo')); });
+        });
+    }
+
+    // viewAlgorithmAcrossMaps jumps straight into byAlgorithm mode for the
+    // given algorithm with every map selected - the one-click path from
+    // "I'm looking at the leaderboard" to "show me all of that algorithm's
+    // solves", rather than requiring the View dropdown + chip + Mazes-tab
+    // checkboxes to be worked through by hand for the common case of
+    // wanting to see everything.
+    function viewAlgorithmAcrossMaps(name) {
+        if (!name) return;
+        selectedSingleAlgorithm = name;
+        selectedMazeIndices = new Set(mazes.map(function (_, i) { return i; }));
+        viewMode = 'byAlgorithm';
+        document.getElementById('viewModeSelect').value = 'byAlgorithm';
+        renderMazeList();
+        renderChips();
+        renderLeaderboard();
+        refreshPanelsPreservingPlayback();
+        closeSidebar();
     }
 
     document.getElementById('tabMazesBtn').addEventListener('click', function () { switchTab('Mazes'); });
@@ -586,6 +940,7 @@
         renderChips();
         renderLeaderboard();
         refreshPanelsPreservingPlayback();
+        closeSidebar(); // picking a maze in the drawer means the user wants to look at its panels, not the drawer
     }
 
     // refreshPanelsPreservingPlayback rebuilds the panel set (new maze,
@@ -609,6 +964,34 @@
         var maze = mazes[activeMazeIndex];
         var el = document.getElementById('algoChips');
         el.innerHTML = '';
+
+        // byAlgorithm mode: exactly one algorithm at a time (radio, not
+        // toggle) - it's the thing every panel now has in common, so
+        // multi-selecting it wouldn't mean anything the way multi-selecting
+        // algorithms to compare on one map does in byMaze mode. "Valid" is
+        // judged across every map here (not just the active one), since a
+        // map outside the active one is exactly what this mode is for
+        // looking at.
+        if (viewMode === 'byAlgorithm') {
+            maze.results.forEach(function (r) {
+                var anyValid = mazes.some(function (m) {
+                    return m.results.some(function (x) { return x.algorithm === r.algorithm && x.valid; });
+                });
+                var chip = document.createElement('div');
+                chip.className = 'chip' + (selectedSingleAlgorithm === r.algorithm ? ' on' : '') + (!anyValid ? ' dq' : '');
+                chip.textContent = r.algorithm + (anyValid ? '' : ' (disqualified everywhere)');
+                chip.addEventListener('click', function () {
+                    if (!anyValid) return;
+                    selectedSingleAlgorithm = r.algorithm;
+                    renderChips();
+                    renderLeaderboard();
+                    refreshPanelsPreservingPlayback();
+                });
+                el.appendChild(chip);
+            });
+            return;
+        }
+
         maze.results.forEach(function (r) {
             var chip = document.createElement('div');
             chip.className = 'chip' + (selectedAlgorithms.has(r.algorithm) ? ' on' : '') + (!r.valid ? ' dq' : '');
@@ -627,93 +1010,142 @@
     }
 
     // ---------- panel construction ----------
-    function buildPanels() {
-        var maze = mazes[activeMazeIndex];
-        var container = document.getElementById('panels');
-        container.innerHTML = '';
-        panelState = [];
-
-        // tpPartner maps a teleporter cell to its paired cell (both
-        // directions), same shape as the Go side's own TeleportLookup - so
-        // a rendered edge/path segment landing on a registered teleporter
-        // cell can be recognized as a forced jump, and the *actual* trigger
-        // cell it was redirected from recovered for drawing (see drawPanel:
-        // Path/Edges never contain the trigger cell itself, only the
-        // resolved landing cell, so without this a teleport hop would
-        // render as one straight line from wherever the search stood
-        // *before* the trigger, skipping the trigger's own position
-        // entirely instead of visibly jumping from it).
+    // tpPartner maps a teleporter cell to its paired cell (both
+    // directions), same shape as the Go side's own TeleportLookup - so a
+    // rendered edge/path segment landing on a registered teleporter cell
+    // can be recognized as a forced jump, and the *actual* trigger cell it
+    // was redirected from recovered for drawing (see drawPanel: Path/Edges
+    // never contain the trigger cell itself, only the resolved landing
+    // cell, so without this a teleport hop would render as one straight
+    // line from wherever the search stood *before* the trigger, skipping
+    // the trigger's own position entirely instead of visibly jumping from
+    // it). Computed per maze - byAlgorithm mode spans several mazes at
+    // once, each with its own independent teleporter layout.
+    function buildTpPartner(maze) {
         var tpPartner = {};
         (maze.teleporters || []).forEach(function (t) {
             tpPartner[t.from.x + ',' + t.from.y] = t.to;
             tpPartner[t.to.x + ',' + t.to.y] = t.from;
         });
+        return tpPartner;
+    }
 
+    // addPanel builds one algorithm-solving-one-map panel, shared by both
+    // view modes - byMaze varies r (the algorithm) across a fixed maze;
+    // byAlgorithm varies maze across a fixed r.algorithm. titleHtml is the
+    // only thing the two modes render differently up top (algorithm name +
+    // score vs. map identity + score).
+    function addPanel(container, maze, r, titleHtml) {
+        var wrap = document.createElement('div');
+        wrap.className = 'panel';
+
+        var title = document.createElement('h3');
+        title.innerHTML = titleHtml;
+        title.querySelector('.info-btn').addEventListener('click', function () { openDoc(r.algorithm); });
+        wrap.appendChild(title);
+
+        var cellSize = Math.max(4, Math.min(20, Math.floor(300 / Math.max(maze.width, maze.height))));
+        var canvas = document.createElement('canvas');
+        canvas.width = maze.width * cellSize;
+        canvas.height = maze.height * cellSize;
+        wrap.appendChild(canvas);
+
+        var readout = document.createElement('div');
+        readout.className = 'readout mono';
+        wrap.appendChild(readout);
+
+        var note = document.createElement('div');
+        note.className = 'note';
+        note.textContent = 'Score is computed from steps/ops/primOps/allocs/mem - deterministic, same every run on any machine. Ops is total discovery work; PrimOps also charges low-level looping and synchronization. Span is retained only to animate concurrent discovery generations. Wall-clock and CPU time are context only because they depend on machine load.';
+        wrap.appendChild(note);
+
+        container.appendChild(wrap);
+
+        var pathSet = new Set(r.path.map(function (c) { return c.x + ',' + c.y; }));
+
+        // waves[i] is edge i's reveal generation: its real Depth for a
+        // solver that reports one (so several edges sharing a Depth -
+        // genuinely found at the same time by different threads - are
+        // revealed together, all at once), or just its own array position
+        // for a solver that doesn't (every edge its own generation, i.e.
+        // today's one-at-a-time reveal in discovery order, unchanged).
+        var edges = r.edges || [];
+        var waves = edges.map(function (e, i) { return e.depth || (i + 1); });
+        var maxWave = waves.length ? Math.max.apply(null, waves) : 1;
+
+        var st = {
+            result: r,
+            maze: maze,
+            canvas: canvas,
+            ctx: canvas.getContext('2d'),
+            cellSize: cellSize,
+            pathCells: r.path,
+            edges: edges,
+            waves: waves,
+            maxWave: maxWave,
+            pathSet: pathSet,
+            tpPartner: buildTpPartner(maze),
+            readoutEl: readout
+        };
+        panelState.push(st);
+        // Not currently playing -> show this panel already solved rather
+        // than blank (see refreshPanelsPreservingPlayback); playing ->
+        // start at 0 and let the running tick() loop take over on its next
+        // frame.
+        drawPanel(st, playing ? 0 : 1);
+    }
+
+    function buildPanels() {
+        var container = document.getElementById('panels');
+        container.innerHTML = '';
+        panelState = [];
+
+        if (viewMode === 'byAlgorithm') {
+            buildPanelsByAlgorithm(container);
+        } else {
+            buildPanelsByMaze(container);
+        }
+    }
+
+    function buildPanelsByMaze(container) {
+        var maze = mazes[activeMazeIndex];
         var chosen = maze.results.filter(function (r) { return r.valid && selectedAlgorithms.has(r.algorithm); });
         chosen.sort(function (a, b) { return (a.score || Infinity) - (b.score || Infinity); });
         chosen.forEach(function (r) {
-            var wrap = document.createElement('div');
-            wrap.className = 'panel';
-
-            var title = document.createElement('h3');
-            title.innerHTML = '<span>' + r.algorithm + ' <button class="info-btn" title="What is ' + r.algorithm + ' doing?">i</button></span><span class="score mono">' + (r.score ? 'score ' + r.score.toFixed(2) : '') + '</span>';
-            title.querySelector('.info-btn').addEventListener('click', function () { openDoc(r.algorithm); });
-            wrap.appendChild(title);
-
-            var cellSize = Math.max(4, Math.min(20, Math.floor(300 / Math.max(maze.width, maze.height))));
-            var canvas = document.createElement('canvas');
-            canvas.width = maze.width * cellSize;
-            canvas.height = maze.height * cellSize;
-            wrap.appendChild(canvas);
-
-            var readout = document.createElement('div');
-            readout.className = 'readout mono';
-            wrap.appendChild(readout);
-
-            var note = document.createElement('div');
-            note.className = 'note';
-            note.textContent = 'Score is computed from steps/ops/allocs/mem - deterministic, same every run on any machine. Ops is the total discovery work, so concurrent solvers are charged for every operation they perform. Span is retained only to animate concurrent discovery generations together. Wall-clock and CPU time are context only, because they depend on how busy this machine happens to be.';
-            wrap.appendChild(note);
-
-            container.appendChild(wrap);
-
-            var pathSet = new Set(r.path.map(function (c) { return c.x + ',' + c.y; }));
-
-            // waves[i] is edge i's reveal generation: its real Depth for a
-            // solver that reports one (so several edges sharing a Depth -
-            // genuinely found at the same time by different threads - are
-            // revealed together, all at once), or just its own array
-            // position for a solver that doesn't (every edge its own
-            // generation, i.e. today's one-at-a-time reveal in discovery
-            // order, unchanged).
-            var edges = r.edges || [];
-            var waves = edges.map(function (e, i) { return e.depth || (i + 1); });
-            var maxWave = waves.length ? Math.max.apply(null, waves) : 1;
-
-            var st = {
-                result: r,
-                maze: maze,
-                canvas: canvas,
-                ctx: canvas.getContext('2d'),
-                cellSize: cellSize,
-                pathCells: r.path,
-                edges: edges,
-                waves: waves,
-                maxWave: maxWave,
-                pathSet: pathSet,
-                tpPartner: tpPartner,
-                readoutEl: readout
-            };
-            panelState.push(st);
-            // Not currently playing -> show this panel already solved
-            // rather than blank (see refreshPanelsPreservingPlayback);
-            // playing -> start at 0 and let the running tick() loop take
-            // over on its next frame.
-            drawPanel(st, playing ? 0 : 1);
+            var titleHtml = '<span>' + r.algorithm + ' <button class="info-btn" title="What is ' + r.algorithm + ' doing?">i</button></span><span class="score mono">' + (r.score ? 'score ' + r.score.toFixed(2) : '') + '</span>';
+            addPanel(container, maze, r, titleHtml);
         });
 
         if (chosen.length === 0) {
             container.innerHTML = '<div class="empty" style="grid-column:1/-1">No valid algorithm selected for this maze.</div>';
+        }
+    }
+
+    // buildPanelsByAlgorithm shows one chip-chosen algorithm's solve across
+    // every checked-off map in the sidebar - the inverse comparison from
+    // buildPanelsByMaze, for "does this algorithm hold up across different
+    // layouts/sizes" instead of "which algorithm wins on this one layout".
+    function buildPanelsByAlgorithm(container) {
+        var name = selectedSingleAlgorithm;
+        if (!name) {
+            container.innerHTML = '<div class="empty" style="grid-column:1/-1">Pick an algorithm above to compare its solve across maps.</div>';
+            return;
+        }
+
+        var indices = Array.from(selectedMazeIndices).sort(function (a, b) { return a - b; });
+        var shown = 0;
+        indices.forEach(function (i) {
+            var maze = mazes[i];
+            var r = maze.results.filter(function (x) { return x.algorithm === name; })[0];
+            if (!r || !r.valid) return;
+            shown++;
+            var subtitle = 'seed=' + maze.seed + ' &middot; ' + maze.style + ' &middot; ' + maze.width + '&times;' + maze.height;
+            var titleHtml = '<span>' + subtitle + ' <button class="info-btn" title="What is ' + name + ' doing?">i</button></span><span class="score mono">' + (r.score ? 'score ' + r.score.toFixed(2) : '') + '</span>';
+            addPanel(container, maze, r, titleHtml);
+        });
+
+        if (shown === 0) {
+            container.innerHTML = '<div class="empty" style="grid-column:1/-1">' + (indices.length === 0 ? 'No maps chosen - pick some in the Mazes tab.' : 'No chosen map has a valid solve for ' + name + '.') + '</div>';
         }
     }
 
@@ -835,8 +1267,6 @@
                     edgeProgress = 1;
                     edgesShown++;
                 } else if (st.waves[i] === activeWave && activeProgress > 0) {
-                    // Every operation in the active span progresses at the
-                    // same time. None of the following span is admitted yet.
                     edgeProgress = activeProgress;
                 } else {
                     continue;
@@ -848,8 +1278,6 @@
                 var tx = toPoint.x * cs + cs / 2, ty = toPoint.y * cs + cs / 2;
                 ctx.moveTo(fx, fy);
                 ctx.lineTo(fx + (tx - fx) * edgeProgress, fy + (ty - fy) * edgeProgress);
-                // The teleport jump is a completed operation too: do not
-                // display it until its active span has reached the barrier.
                 if (trigger && edgeProgress === 1) {
                     teleportEdgeSegs.push([tx, ty, e.to.x * cs + cs / 2, e.to.y * cs + cs / 2]);
                 }
@@ -858,7 +1286,7 @@
             ctx.globalAlpha = 1;
 
             if (teleportEdgeSegs.length) {
-                ctx.strokeStyle = getCssVar('--teleport-line');
+                ctx.strokeStyle = getCssVar('--trail');
                 ctx.setLineDash([Math.max(2, cs * 0.18), Math.max(2, cs * 0.18)]);
                 ctx.beginPath();
                 teleportEdgeSegs.forEach(function (s) { ctx.moveTo(s[0], s[1]); ctx.lineTo(s[2], s[3]); });
@@ -871,9 +1299,6 @@
             // full-cell red squares were.
             ctx.fillStyle = getCssVar('--visited');
             for (var j = 0; j < totalEdges; j++) {
-                // A branch tip is only complete after its whole span has
-                // completed; partial operations do not leak into the next
-                // animation generation.
                 if (st.waves[j] > completedWave) continue;
                 var to = st.edges[j].to;
                 if (st.pathSet.has(to.x + ',' + to.y)) continue;
@@ -933,6 +1358,7 @@
         var html = '';
         html += '<div class="label">Steps</div><div class="live">' + liveSteps + ' / ' + r.steps + '</div>';
         html += '<div class="label">Span</div><div class="live">' + (r.spanCount != null ? r.spanCount : '&mdash;') + '</div>';
+        html += '<div class="label">PrimOps</div><div class="live">' + (r.primOpsCount != null ? r.primOpsCount : '&mdash;') + '</div>';
         html += '<div class="label">Allocs</div><div class="live">' + (r.allocsCount != null ? r.allocsCount : '&mdash;') + '</div>';
         html += '<div class="label">Mem</div><div class="live">' + formatBytes(r.memBytes) + '</div>';
         html += '<div class="label">Tree edges (ops, info)</div><div class="live">' + edgesShown + ' / ' + st.edges.length + '</div>';
@@ -995,20 +1421,18 @@
         var durationMs = parseFloat(durationSlider.value) * 1000;
         var mode = modeSelect.value;
 
-        // "Proportional" paces each panel by span (critical-path length)
-        // for visualization only. It makes all work in one concurrent
-        // discovery generation appear together before the next generation;
-        // score is intentionally based on total ops, not span. Wall-clock
-        // time remains unsuitable because it varies by machine and load.
-        var maxSpan = 1;
+        // Proportional mode is paced by span for visualization only. It
+        // preserves visible parallel generations and their barriers; score
+        // uses total Ops and PrimOps, never wall-clock timing.
+        var maxPace = 1;
         if (mode === 'proportional') {
-            panelState.forEach(function (st) { maxSpan = Math.max(maxSpan, st.result.spanCount || st.edges.length); });
+            panelState.forEach(function (st) { maxPace = Math.max(maxPace, st.result.spanCount || st.edges.length); });
         }
 
         var allDone = true;
         panelState.forEach(function (st) {
-            var span = st.result.spanCount || st.edges.length;
-            var panelDurationMs = mode === 'proportional' ? durationMs * (span / maxSpan) : durationMs;
+            var pace = st.result.spanCount || st.edges.length;
+            var panelDurationMs = mode === 'proportional' ? durationMs * (pace / maxPace) : durationMs;
             panelDurationMs = Math.max(panelDurationMs, 1);
             var progress = Math.min(1, elapsed / panelDurationMs);
             if (progress < 1) allDone = false;

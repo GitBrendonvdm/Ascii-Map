@@ -25,12 +25,13 @@ type AStarSolver struct{}
 func (AStarSolver) Name() string { return "A-Star" }
 
 func (AStarSolver) Solve(m *Maze) Solution {
-	leg1, visited1, edges1 := aStarPath(m, m.Start, m.Key)
-	leg2, visited2, edges2 := aStarPath(m, m.Key, m.Exit)
+	leg1, visited1, edges1, primOps1 := aStarPath(m, m.Start, m.Key)
+	leg2, visited2, edges2, primOps2 := aStarPath(m, m.Key, m.Exit)
 	return Solution{
 		Path:    joinLegs(leg1, leg2),
 		Visited: append(visited1, visited2...),
 		Edges:   append(edges1, edges2...),
+		PrimOps: primOps1 + primOps2,
 	}
 }
 
@@ -70,7 +71,7 @@ func (q *aStarQueue) Pop() interface{} {
 	return item
 }
 
-func aStarPath(m *Maze, src, dst Cell) (path, visited []Cell, edges []Edge) {
+func aStarPath(m *Maze, src, dst Cell) (path, visited []Cell, edges []Edge, primOps int64) {
 	lookup := m.TeleportLookup()
 
 	gScore := map[Cell]int{src: 0}
@@ -79,9 +80,11 @@ func aStarPath(m *Maze, src, dst Cell) (path, visited []Cell, edges []Edge) {
 
 	pq := &aStarQueue{}
 	heap.Init(pq)
+	primOps += heapOpCost(pq.Len()) // see Solution.PrimOps: a heap push/pop costs more than a plain queue's
 	heap.Push(pq, &aStarItem{cell: src, priority: manhattan(src, dst)})
 
 	for pq.Len() > 0 {
+		primOps += heapOpCost(pq.Len())
 		cur := heap.Pop(pq).(*aStarItem).cell
 		if visitedSet[cur] {
 			continue
@@ -95,10 +98,11 @@ func aStarPath(m *Maze, src, dst Cell) (path, visited []Cell, edges []Edge) {
 			edges = append(edges, Edge{From: parent[cur], To: cur})
 		}
 		if cur == dst {
-			return reconstructPath(parent, src, dst), visitedSlice(visitedSet), edges
+			return reconstructPath(parent, src, dst), visitedSlice(visitedSet), edges, primOps
 		}
 
 		for _, dir := range allDirections {
+			primOps++ // every direction checked, open or not, is a real primitive op - see Solution.PrimOps
 			if !m.isOpen(cur, dir) {
 				continue
 			}
@@ -110,9 +114,10 @@ func aStarPath(m *Maze, src, dst Cell) (path, visited []Cell, edges []Edge) {
 			if best, ok := gScore[landing]; !ok || tentative < best {
 				gScore[landing] = tentative
 				parent[landing] = cur
+				primOps += heapOpCost(pq.Len())
 				heap.Push(pq, &aStarItem{cell: landing, priority: tentative + manhattan(landing, dst)})
 			}
 		}
 	}
-	return nil, visitedSlice(visitedSet), edges // unreachable; shouldn't happen for a generator-verified maze
+	return nil, visitedSlice(visitedSet), edges, primOps // unreachable; shouldn't happen for a generator-verified maze
 }

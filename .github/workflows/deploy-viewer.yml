@@ -5,6 +5,9 @@ name: Deploy results viewer
 # so the hosted viewer always reflects whatever's on main, and its
 # auto-load (see viewer.html's own auto-load comment) always has a fresh
 # same-origin bench_results.json to find, no manual step required.
+# bench_results.json is one file covering every size tier (see
+# benchmarkSizeTiers in seeds.go) - viewer.html's Size selector switches
+# between the groups already inside it, no separate per-size fetch.
 
 on:
   push:

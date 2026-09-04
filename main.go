@@ -18,6 +18,7 @@ type runResult struct {
 	allocs   int64 // heap allocation count (runtime.MemStats.Mallocs delta) - deterministic score input
 	ops      int   // search effort: len(Solution.Edges) - deterministic score input
 	span     int   // critical-path length: Solution.Span, or ops when unset; informational only
+	primOps  int64 // deterministic CPU-cost proxy: Solution.PrimOps - feeds the score, see that field's doc comment
 	steps    int   // moves taken (path cell count - 1)
 
 	valid         bool
@@ -140,11 +141,9 @@ func main() {
 		path = "maze_result.json"
 	}
 	jm := buildJSONMazeWithSolutions(*seed, *style, m, results, scored)
-	export := jsonExport{
-		DirectionBits: jsonDirection{North: North, South: South, East: East, West: West},
-		Mazes:         []jsonMaze{jm},
-	}
-	if err := writeExportJSON(path, export); err != nil {
+	group := jsonSizeGroup{Width: m.Width, Height: m.Height, Mazes: []jsonMaze{jm}}
+	directionBits := jsonDirection{North: North, South: South, East: East, West: West}
+	if err := writeBenchExportNDJSON(path, directionBits, []jsonSizeGroup{group}, nil); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not write %s: %v\n", path, err)
 	} else {
 		fmt.Printf("Full results + animated route data written to %s - open viewer.html in a browser to explore.\n", path)
@@ -223,9 +222,12 @@ func runAllSolvers(m *Maze) []runResult {
 		cpuElapsed := (processCPUTime() - cpuBefore) / time.Duration(timingRuns)
 
 		ops := len(sol.Edges)
-		// Span remains useful for visualization and diagnostics, but it is
-		// deliberately not a score input: theoretical dependency depth does
-		// not include a concurrent solver's real worker/synchronization cost.
+		// Span defaults to 0 on Solution - the sentinel a single-threaded
+		// solver leaves unset, meaning "every discovery was sequentially
+		// dependent on the last, so span equals total work" (see
+		// Solution.Span's doc comment). Only a genuinely concurrent
+		// solver (BrenThread, BrenThreadOptimized) reports a real,
+		// smaller span.
 		span := sol.Span
 		if span == 0 {
 			span = ops
@@ -239,6 +241,7 @@ func runAllSolvers(m *Maze) []runResult {
 			allocs:   allocs,
 			ops:      ops,
 			span:     span,
+			primOps:  sol.PrimOps,
 			steps:    len(sol.Path) - 1,
 		}
 		if err := ValidatePath(m, sol.Path); err != nil {
@@ -297,7 +300,7 @@ func printPanelsOrSummary(results []runResult, summaryOnly bool, consoleWidth in
 func printLeaderboard(title string, results []runResult) {
 	scored := scoreResults(results)
 
-	fmt.Printf("--- %s (deterministic efficiency score = geometric mean of steps/ops/allocs/mem ratios vs. the best on this maze; 1.0 = best in everything, smallest first; span/time/cpu are informational only - see scoring.go) ---\n", title)
+	fmt.Printf("--- %s (score = geometric mean of steps/ops/primOps/allocs/mem ratios vs. the best on this maze; 1.0 = best in everything, smallest first; span/time/cpu below are informational only - see scoring.go) ---\n", title)
 
 	if len(scored) > 0 {
 		minSteps := scored[0].steps
@@ -324,8 +327,8 @@ func printLeaderboard(title string, results []runResult) {
 	}
 
 	for i, r := range scored {
-		fmt.Printf("%2d. %-20s score %6.2f   %6d steps   %6d ops   %6d allocs   mem %10s   (span %d, time %s, cpu %s)\n",
-			i+1, r.name, r.score, r.steps, r.ops, r.allocs, formatBytes(r.memBytes), r.span, r.elapsed, r.cpuTime)
+		fmt.Printf("%2d. %-20s score %6.2f   %6d steps   %6d ops   %8d primOps   %6d allocs   mem %10s   (span %d, time %s, cpu %s)\n",
+			i+1, r.name, r.score, r.steps, r.ops, r.primOps, r.allocs, formatBytes(r.memBytes), r.span, r.elapsed, r.cpuTime)
 	}
 	disqualified := len(results) - len(scored)
 	if disqualified > 0 {
@@ -342,85 +345,121 @@ type seedRun struct {
 }
 
 type aggregate struct {
-	name      string
-	avgScore  float64
-	avgSteps  float64
-	avgOps    float64 // total work; deterministic score input
-	avgSpan   float64 // informational only
-	avgAllocs float64
-	avgMem    float64
-	avgTime   time.Duration // informational only - see scoring.go
-	avgCPU    time.Duration // informational only - see scoring.go
-	wins      int
+	name       string
+	avgScore   float64
+	avgSteps   float64
+	avgOps     float64 // total work; deterministic score input
+	avgSpan    float64 // informational only
+	avgPrimOps float64 // deterministic CPU-cost proxy - feeds the score, see Solution.PrimOps
+	avgAllocs  float64
+	avgMem     float64
+	avgTime    time.Duration // informational only - see scoring.go
+	avgCPU     time.Duration // informational only - see scoring.go
+	wins       int
+	runs       int // how many maze runs this average is actually over - 10 for a per-size aggregate, up to 10*len(benchmarkSizeTiers) for the cross-size overall one
 }
 
-// runBenchmark regenerates the same 10 fixed mazes every time (so results
-// are repeatable across runs and machines) and runs every algorithm against
-// each one, printing progress as it goes since generating+solving all 10
-// can take a few seconds and a silently blank console reads as frozen. The
-// summary (every algorithm, ranked by average score across all 10 seeds) is
-// printed first; the route visualizer - one row per algorithm, that
-// algorithm's solved maze for all 10 seeds side by side - follows below it.
+// runBenchmark always sweeps every tier in benchmarkSizeTiers (see
+// seeds.go) and writes them all into ONE export file - one file, not one
+// per size, so the viewer's Size selector switches between in-memory
+// groups already sitting in the loaded JSON instead of triggering a
+// separate fetch. There is deliberately no way to ask for a single size
+// here: the whole point is that `-bench` always produces the complete
+// picture in one shot, the same way it always solved every registered
+// algorithm rather than a chosen subset.
 func runBenchmark(summaryOnly bool, consoleWidthOverride int, consoleRoutes bool, outPath string) {
 	consoleWidth := resolveConsoleWidth(consoleWidthOverride)
 
-	var runsBySeed []seedRun
-	for i, seed := range BenchmarkSeeds {
-		styleName := BenchmarkStyleNames[i]
-		style, ok := mazeStyleByName(styleName)
-		if !ok {
-			fmt.Fprintf(os.Stderr, "internal error: benchmark style %q is not registered\n", styleName)
-			os.Exit(1)
+	var sizeGroups []jsonSizeGroup
+	var allRuns []seedRun // every seed's results across every tier - overall (cross-size) leaderboard, below the loop, aggregates over this
+	for _, tier := range benchmarkSizeTiers {
+		fmt.Fprintf(os.Stderr, "=== size %dx%d ===\n", tier.width, tier.height)
+
+		var runsBySeed []seedRun
+		for i, seed := range BenchmarkSeeds {
+			styleName := BenchmarkStyleNames[i]
+			style, ok := mazeStyleByName(styleName)
+			if !ok {
+				fmt.Fprintf(os.Stderr, "internal error: benchmark style %q is not registered\n", styleName)
+				os.Exit(1)
+			}
+			fmt.Fprintf(os.Stderr, "[%d/%d] %s (seed=%d): generating maze...\n", i+1, len(BenchmarkSeeds), styleName, seed)
+			m := style.Generate(tier.width, tier.height, seed, BenchTeleporters)
+			fmt.Fprintf(os.Stderr, "[%d/%d] %s (seed=%d): running %d algorithms...\n", i+1, len(BenchmarkSeeds), styleName, seed, len(Solvers()))
+			runsBySeed = append(runsBySeed, seedRun{seed: seed, style: styleName, maze: m, results: runAllSolvers(m)})
 		}
-		fmt.Fprintf(os.Stderr, "[%d/%d] %s (seed=%d): generating maze...\n", i+1, len(BenchmarkSeeds), styleName, seed)
-		m := style.Generate(BenchWidth, BenchHeight, seed, BenchTeleporters)
-		fmt.Fprintf(os.Stderr, "[%d/%d] %s (seed=%d): running %d algorithms...\n", i+1, len(BenchmarkSeeds), styleName, seed, len(Solvers()))
-		runsBySeed = append(runsBySeed, seedRun{seed: seed, style: styleName, maze: m, results: runAllSolvers(m)})
+		fmt.Fprintln(os.Stderr, "done.")
+		fmt.Fprintln(os.Stderr)
+		allRuns = append(allRuns, runsBySeed...)
+
+		agg := aggregateScores(runsBySeed)
+
+		fmt.Printf("=== %dx%d - average score across all %d seeds (score = geometric mean of steps/ops/primOps/allocs/mem ratios vs. the best on each maze; smallest first; span/time/cpu below are informational only - see scoring.go) ===\n", tier.width, tier.height, len(BenchmarkSeeds))
+		for i, a := range agg {
+			fmt.Printf("%2d. %-20s avg score %6.2f   avg %6.1f steps   avg %7.1f ops   avg %9.1f primOps   avg %7.1f allocs   avg mem %10s   won %d/%d   (avg span %.1f, avg time %s, avg cpu %s)\n",
+				i+1, a.name, a.avgScore, a.avgSteps, a.avgOps, a.avgPrimOps, a.avgAllocs, formatBytes(int64(a.avgMem)), a.wins, a.runs, a.avgSpan, a.avgTime, a.avgCPU)
+		}
+		fmt.Println()
+
+		// Every algorithm's path/visited cells against every one of the 10
+		// mazes, plus the layout needed to redraw each maze - this is what
+		// lets viewer.html animate solves and compare algorithms side by
+		// side, instead of the console dumping ten mazes times N
+		// algorithms of ASCII art that scrolls past faster than anyone can
+		// read it.
+		fmt.Fprintf(os.Stderr, "building export for %dx%d (re-solving each algorithm once per maze to capture path/visited data)...\n", tier.width, tier.height)
+		jsonMazes := make([]jsonMaze, len(runsBySeed))
+		for i, sr := range runsBySeed {
+			scored := scoreResults(sr.results)
+			jsonMazes[i] = buildJSONMazeWithSolutions(sr.seed, sr.style, sr.maze, sr.results, scored)
+		}
+		sizeGroups = append(sizeGroups, jsonSizeGroup{
+			Width:       tier.width,
+			Height:      tier.height,
+			Mazes:       jsonMazes,
+			Leaderboard: buildJSONAggregate(agg),
+		})
+
+		if !summaryOnly && consoleRoutes {
+			fmt.Printf("=== Route visualizer (%dx%d) - each algorithm's solved map for all 10 seeds ===\n", tier.width, tier.height)
+			fmt.Println()
+			printRouteVisualizer(agg, runsBySeed, consoleWidth)
+		}
 	}
-	fmt.Fprintln(os.Stderr, "done.")
-	fmt.Fprintln(os.Stderr)
 
-	agg := aggregateScores(runsBySeed)
-
-	fmt.Println("=== All algorithms - deterministic efficiency score across all 10 seeds (geometric mean of steps/ops/allocs/mem ratios vs. the best on each maze; smallest first; span/time/cpu below are informational only - see scoring.go) ===")
-	for i, a := range agg {
-		fmt.Printf("%2d. %-20s avg score %6.2f   avg %6.1f steps   avg %7.1f ops   avg %7.1f allocs   avg mem %10s   won %d/%d   (avg span %.1f, avg time %s, avg cpu %s)\n",
-			i+1, a.name, a.avgScore, a.avgSteps, a.avgOps, a.avgAllocs, formatBytes(int64(a.avgMem)), a.wins, len(BenchmarkSeeds), a.avgSpan, a.avgTime, a.avgCPU)
+	// The overall leaderboard aggregates every maze run across every size
+	// tier - up to 10*len(benchmarkSizeTiers) runs per algorithm, not just
+	// 10. That mixing is only meaningful because score is already a ratio
+	// against the best algorithm on that exact same maze (see scoring.go),
+	// so it stays comparable across wildly different maze sizes the same
+	// way it already does across the 10 differently-styled mazes within
+	// one size - unlike the raw steps/span/etc. averages also shown here,
+	// which mix scales freely and are informational only, same as within
+	// one size tier.
+	overallAgg := aggregateScores(allRuns)
+	fmt.Printf("=== Overall - average score across all %d maze runs (%d seeds x %d size tiers) ===\n", len(allRuns), len(BenchmarkSeeds), len(benchmarkSizeTiers))
+	for i, a := range overallAgg {
+		fmt.Printf("%2d. %-20s avg score %6.2f   won %d/%d   (avg %6.1f steps, avg %7.1f span, avg %9.1f primOps, avg %7.1f allocs, avg mem %s - all informational when mixed across sizes)\n",
+			i+1, a.name, a.avgScore, a.wins, a.runs, a.avgSteps, a.avgSpan, a.avgPrimOps, a.avgAllocs, formatBytes(int64(a.avgMem)))
 	}
 	fmt.Println()
 
-	// Every algorithm's path/visited cells against every one of the 10
-	// mazes, plus the layout needed to redraw each maze - this is what lets
-	// viewer.html animate solves and compare algorithms side by side,
-	// instead of the console dumping ten mazes times N algorithms of ASCII
-	// art that scrolls past faster than anyone can read it.
-	fmt.Fprintln(os.Stderr, "building export (re-solving each algorithm once per maze to capture path/visited data)...")
-	jsonMazes := make([]jsonMaze, len(runsBySeed))
-	for i, sr := range runsBySeed {
-		scored := scoreResults(sr.results)
-		jsonMazes[i] = buildJSONMazeWithSolutions(sr.seed, sr.style, sr.maze, sr.results, scored)
-	}
 	path := outPath
 	if path == "" {
 		path = "bench_results.json"
 	}
-	export := jsonExport{
-		DirectionBits: jsonDirection{North: North, South: South, East: East, West: West},
-		Mazes:         jsonMazes,
-		Leaderboard:   buildJSONAggregate(agg),
-	}
-	if err := writeExportJSON(path, export); err != nil {
+	directionBits := jsonDirection{North: North, South: South, East: East, West: West}
+	if err := writeBenchExportNDJSON(path, directionBits, sizeGroups, buildJSONAggregate(overallAgg)); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not write %s: %v\n", path, err)
 	} else {
-		fmt.Printf("Full results + animated route data for all %d mazes written to %s - open viewer.html in a browser to explore (compare algorithms side by side, animate solves, see cpu/mem).\n\n", len(runsBySeed), path)
+		fmt.Printf("Full results + animated route data for all %d size tiers written to %s - open viewer.html in a browser to explore (compare algorithms side by side, animate solves, see cpu/mem).\n\n", len(sizeGroups), path)
 	}
+}
 
-	if summaryOnly || !consoleRoutes {
-		return
-	}
-
-	fmt.Println("=== Route visualizer - each algorithm's solved map for all 10 seeds ===")
-	fmt.Println()
+// printRouteVisualizer is runBenchmark's optional -console-routes dump for
+// one size tier: one row per algorithm, that algorithm's solved maze for
+// all 10 seeds side by side.
+func printRouteVisualizer(agg []aggregate, runsBySeed []seedRun, consoleWidth int) {
 	for _, a := range agg {
 		fmt.Printf("--- %s ---\n", a.name)
 		var panels []panel
@@ -441,8 +480,8 @@ func runBenchmark(summaryOnly bool, consoleWidthOverride int, consoleRoutes bool
 }
 
 // aggregateScores scores every seed's results (see scoreResults in
-// scoring.go), averages each algorithm's score/steps/ops/allocs/mem (the
-// deterministic quantities scored on) plus span/time/cpu (informational
+// scoring.go), averages each algorithm's score/steps/span/allocs/mem (the
+// deterministic quantities scored on) plus ops/time/cpu (informational
 // only) across all seeds it was valid in, and returns them sorted
 // best-average-score first. A seed's top scorer counts as a "win" for
 // that seed.
@@ -451,6 +490,7 @@ func aggregateScores(runsBySeed []seedRun) []aggregate {
 	totalSteps := map[string]int{}
 	totalOps := map[string]int{}
 	totalSpan := map[string]int{}
+	totalPrimOps := map[string]int64{}
 	totalAllocs := map[string]int64{}
 	totalMem := map[string]int64{}
 	totalTime := map[string]time.Duration{}
@@ -465,6 +505,7 @@ func aggregateScores(runsBySeed []seedRun) []aggregate {
 			totalSteps[r.name] += r.steps
 			totalOps[r.name] += r.ops
 			totalSpan[r.name] += r.span
+			totalPrimOps[r.name] += r.primOps
 			totalAllocs[r.name] += r.allocs
 			totalMem[r.name] += r.memBytes
 			totalTime[r.name] += r.elapsed
@@ -482,16 +523,18 @@ func aggregateScores(runsBySeed []seedRun) []aggregate {
 			continue
 		}
 		agg = append(agg, aggregate{
-			name:      name,
-			avgScore:  totalScore[name] / float64(n),
-			avgSteps:  float64(totalSteps[name]) / float64(n),
-			avgOps:    float64(totalOps[name]) / float64(n),
-			avgSpan:   float64(totalSpan[name]) / float64(n),
-			avgAllocs: float64(totalAllocs[name]) / float64(n),
-			avgMem:    float64(totalMem[name]) / float64(n),
-			avgTime:   totalTime[name] / time.Duration(n),
-			avgCPU:    totalCPU[name] / time.Duration(n),
-			wins:      wins[name],
+			name:       name,
+			avgScore:   totalScore[name] / float64(n),
+			avgSteps:   float64(totalSteps[name]) / float64(n),
+			avgOps:     float64(totalOps[name]) / float64(n),
+			avgSpan:    float64(totalSpan[name]) / float64(n),
+			avgPrimOps: float64(totalPrimOps[name]) / float64(n),
+			avgAllocs:  float64(totalAllocs[name]) / float64(n),
+			avgMem:     float64(totalMem[name]) / float64(n),
+			avgTime:    totalTime[name] / time.Duration(n),
+			avgCPU:     totalCPU[name] / time.Duration(n),
+			wins:       wins[name],
+			runs:       n,
 		})
 	}
 	sort.Slice(agg, func(i, j int) bool { return agg[i].avgScore < agg[j].avgScore })

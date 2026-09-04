@@ -42,74 +42,88 @@ func (HangeonSolver) Solve(m *Maze) Solution {
 	toCell := func(c hangeonCoordinate) Cell { return Cell{X: (c.Col - 1) / 2, Y: (c.Row - 1) / 2} }
 	isReal := func(c hangeonCoordinate) bool { return c.Row%2 == 1 && c.Col%2 == 1 }
 
-	leg1, visited1, edges1 := hangeonShortestPath(g, toCoord(m.Start), toCoord(m.Key), isReal, toCell)
-	if leg1 == nil {
-		return Solution{Visited: visited1, Edges: edges1}
+	// lookup is TeleportLookup translated into this solver's own coordinate
+	// space, applied at traversal time in hangeonShortestPath rather than
+	// baked into the graph - see buildHangeonGraph's doc comment for why.
+	lookup := make(map[hangeonCoordinate]hangeonCoordinate, len(m.Teleporters)*2)
+	for from, to := range m.TeleportLookup() {
+		lookup[toCoord(from)] = toCoord(to)
 	}
-	leg2, visited2, edges2 := hangeonShortestPath(g, toCoord(m.Key), toCoord(m.Exit), isReal, toCell)
+
+	leg1, visited1, edges1, primOps1 := hangeonShortestPath(g, lookup, toCoord(m.Start), toCoord(m.Key), isReal, toCell)
+	if leg1 == nil {
+		return Solution{Visited: visited1, Edges: edges1, PrimOps: primOps1}
+	}
+	leg2, visited2, edges2, primOps2 := hangeonShortestPath(g, lookup, toCoord(m.Key), toCoord(m.Exit), isReal, toCell)
 	if leg2 == nil {
-		return Solution{Visited: append(visited1, visited2...), Edges: append(edges1, edges2...)}
+		return Solution{Visited: append(visited1, visited2...), Edges: append(edges1, edges2...), PrimOps: primOps1 + primOps2}
 	}
 
 	return Solution{
 		Path:    joinLegs(leg1, leg2),
 		Visited: append(visited1, visited2...),
 		Edges:   append(edges1, edges2...),
+		PrimOps: primOps1 + primOps2,
 	}
 }
 
+// hangeonGapOffset shifts a crossing's forward gap coordinate into a
+// second, disjoint region of coordinate space to build its distinct
+// backward gap - see buildHangeonGraph's doc comment. Real cells and
+// ordinary gaps both stay within [0, 2*maxDimension], so this - comfortably
+// beyond any maze this project generates - never collides with a real
+// coordinate or with another crossing's own gaps.
+const hangeonGapOffset = 1 << 20
+
 // buildHangeonGraph renders the maze as the 2x-scaled grid described on
 // HangeonSolver and derives its adjacency graph one wall crossing at a
-// time. A forced teleporter is folded in right here, at construction time:
-// any edge whose destination is a teleporter's trigger tile is rewired to
-// its paired tile instead - "stepping toward a teleporter forces you to
-// its partner, no choice in the matter."
+// time - purely topological, with no teleport awareness at all: forced
+// teleportation is resolved separately, at BFS traversal time (see
+// hangeonShortestPath), the same "redirect the moment you're about to land
+// on a registered endpoint" pattern every other solver in this codebase
+// already uses, not baked into the graph itself.
 //
-// Both ends of a pair are triggers (teleporters are bidirectional), which
-// makes the gap immediately next to *either* end ambiguous if handled
-// naively: that one gap node would need to mean "someone is approaching
-// this trigger from outside" (redirect) when reached from its far
-// neighbor, but "I just left this trigger, keep going" (don't re-trigger)
-// when reached from the trigger's own side - and a graph edge can't carry
-// "which direction did you arrive from" information. The fix is to never
-// let a trigger's own outgoing move touch its adjacent gap at all: it
-// jumps straight to whatever's on the far side of that gap (redirected
-// again if that's also a trigger), collapsing two raw hops into one. Every
-// gap next to a trigger is then only ever reached, and only ever means,
-// "approaching from outside" - there's no second interpretation left for a
-// search to accidentally pick.
+// Each open wall between real cells cell and n gets *two* single-purpose
+// gap nodes - one for cell->n, a different one for n->cell - rather than
+// one shared, undirected gap serving both directions. Two earlier versions
+// of this function tried sharing a single gap and ran into two different
+// failure modes that both trace back to the same root cause: a shared
+// gap's edge list can't record which direction it was entered from, so an
+// edge meant for approaching a trigger from one side was just as reachable
+// from the other. The first attempt resolved each of a gap's two edges
+// independently at construction time - meaning the partner of a trigger
+// endpoint sat right there in the shared list regardless of which side you
+// came from, so stepping back the way you'd just come from (the same gap,
+// same direction, no new ground covered) could hop to a completely
+// unrelated, distant cell in one step (an illegal move a stress test
+// caught via ValidatePath). Patching that by skipping a gap's edge back
+// toward its own immediate predecessor fixed the illegal move but broke
+// something subtler: a *shared* gap can only ever be marked visited once,
+// so the instant either cell's approach claimed it, the other cell's
+// entirely different, legitimate approach through the same physical
+// crossing was permanently locked out too - even on mazes where the true
+// shortest route (independently verified against BFS) requires bouncing
+// off the same teleporter from two different neighboring cells. Giving
+// each direction its own private node removes the sharing that both bugs
+// trace back to, instead of special-casing around it: forward and
+// backward can never block each other, because they were never the same
+// graph node to begin with.
 func buildHangeonGraph(m *Maze) hangeonGraph {
 	toCoord := func(c Cell) hangeonCoordinate { return hangeonCoordinate{Row: 2*c.Y + 1, Col: 2*c.X + 1} }
 
-	redirect := make(map[hangeonCoordinate]hangeonCoordinate)
-	for from, to := range m.TeleportLookup() {
-		redirect[toCoord(from)] = toCoord(to)
-	}
-	resolve := func(c hangeonCoordinate) hangeonCoordinate {
-		if dest, ok := redirect[c]; ok {
-			return dest
-		}
-		return c
-	}
-
 	g := make(hangeonGraph)
 
-	// addCrossing wires one open wall between real cells cell and n
-	// (gap sitting between them) into the graph, handling every
-	// combination of either side being an ordinary cell or a trigger.
-	addCrossing := func(cell, gap, n hangeonCoordinate) {
-		if _, trigger := redirect[cell]; trigger {
-			g[cell] = append(g[cell], resolve(n))
-		} else {
-			g[cell] = append(g[cell], gap)
-			g[gap] = append(g[gap], resolve(n))
-		}
-		if _, trigger := redirect[n]; trigger {
-			g[n] = append(g[n], resolve(cell))
-		} else {
-			g[n] = append(g[n], gap)
-			g[gap] = append(g[gap], resolve(cell))
-		}
+	// addCrossing wires one open wall between real cells cell and n into
+	// the graph as two independent, single-edge directed hops: cell->
+	// gapForward->n, and (via a disjoint gapForward+offset coordinate)
+	// n->gapBackward->cell.
+	addCrossing := func(cell, gapForward, n hangeonCoordinate) {
+		g[cell] = append(g[cell], gapForward)
+		g[gapForward] = append(g[gapForward], n)
+
+		gapBackward := hangeonCoordinate{Row: gapForward.Row + hangeonGapOffset, Col: gapForward.Col}
+		g[n] = append(g[n], gapBackward)
+		g[gapBackward] = append(g[gapBackward], cell)
 	}
 
 	for y := 0; y < m.Height; y++ {
@@ -139,15 +153,23 @@ func buildHangeonGraph(m *Maze) hangeonGraph {
 // just extends its nearest real ancestor's reach one hop further, so two
 // raw hops through a gap collapse transparently into one edge between the
 // real cells on either side of it.
-func hangeonShortestPath(g hangeonGraph, src, dst hangeonCoordinate, isReal func(hangeonCoordinate) bool, toCell func(hangeonCoordinate) Cell) (path, visited []Cell, edges []Edge) {
+//
+// Forced teleportation is resolved here, not in g itself (see
+// buildHangeonGraph's doc comment for why): the moment a graph edge's raw
+// destination is a real, registered teleporter cell, it's redirected to
+// its paired cell before anything else - visited/parent/edge bookkeeping,
+// the dst check - ever sees it, so a redirect is indistinguishable from an
+// ordinary edge to everything downstream, exactly like every other solver
+// in this codebase treats it.
+func hangeonShortestPath(g hangeonGraph, lookup map[hangeonCoordinate]hangeonCoordinate, src, dst hangeonCoordinate, isReal func(hangeonCoordinate) bool, toCell func(hangeonCoordinate) Cell) (path, visited []Cell, edges []Edge, primOps int64) {
 	if _, ok := g[src]; !ok {
-		return nil, nil, nil
+		return nil, nil, nil, 0
 	}
 	if _, ok := g[dst]; !ok {
-		return nil, nil, nil
+		return nil, nil, nil, 0
 	}
 	if src == dst {
-		return []Cell{toCell(src)}, []Cell{toCell(src)}, nil
+		return []Cell{toCell(src)}, []Cell{toCell(src)}, nil, 0
 	}
 
 	visitedSet := map[hangeonCoordinate]bool{src: true}
@@ -166,7 +188,12 @@ func hangeonShortestPath(g hangeonGraph, src, dst hangeonCoordinate, isReal func
 		current := queue[0]
 		queue = queue[1:]
 		ancestor := realAncestor[current]
-		for _, next := range g[current] {
+		for _, raw := range g[current] {
+			primOps++ // every graph edge examined - real cell or gap - is a real primitive op, see Solution.PrimOps
+			next := raw
+			if dest, ok := lookup[next]; ok {
+				next = dest // forced redirect, resolved before this edge is treated as reaching anywhere
+			}
 			if visitedSet[next] {
 				continue
 			}
@@ -182,12 +209,12 @@ func hangeonShortestPath(g hangeonGraph, src, dst hangeonCoordinate, isReal func
 				realAncestor[next] = ancestor
 			}
 			if next == dst {
-				return reconstructHangeonPath(parent, src, dst, isReal, toCell), visited, edges
+				return reconstructHangeonPath(parent, src, dst, isReal, toCell), visited, edges, primOps
 			}
 			queue = append(queue, next)
 		}
 	}
-	return nil, visited, edges // unreachable; shouldn't happen for a generator-verified maze
+	return nil, visited, edges, primOps // unreachable; shouldn't happen for a generator-verified maze
 }
 
 // reconstructHangeonPath walks parent pointers from dst back to src,

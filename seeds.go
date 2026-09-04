@@ -19,21 +19,36 @@ var BenchmarkStyleNames = [10]string{
 	"Prim", "Kruskal", "Spiral", "Cave", "Winding",
 }
 
-// Fixed dimensions for benchmark mazes, so "the same maps" really means the
-// same maps - changing width/height/teleporters would change the layout
-// even with an identical seed.
+// BenchTeleporters is the fixed teleporter-pair count for every benchmark
+// maze, at every size in benchmarkSizeTiers - changing it would change the
+// layout even with an identical seed, the same reason width and height
+// stay fixed per tier rather than per run.
+const BenchTeleporters = 3
+
+// sizeTier is one entry in benchmarkSizeTiers.
+type sizeTier struct {
+	width, height int
+}
+
+// benchmarkSizeTiers is every size runBenchmark sweeps, in one -bench
+// invocation, into one combined export file (see jsonSizeGroup) - this is
+// the full set viewer.html's Size selector offers. 21x15 stays first/
+// default since it's the smallest, fastest tier and matches every export
+// this project ever shipped before size tiers existed.
 //
-// Deliberately NOT the -size xlarge/large presets: -bench's export writes
-// every algorithm's full Path/Visited/Edges for all 10 mazes to JSON for
-// viewer.html, and at 100x100 that export alone ran this machine out of
-// disk space before finishing (edges routinely into the tens of thousands
-// per algorithm per maze, vs. a few hundred at this size) - impractical
-// for a file a browser has to fetch and parse client-side, and for the
-// GitHub Pages deployment (see .github/workflows/deploy-viewer.yml) that
-// regenerates and publishes it on every push. -size large/xlarge are still
-// there for exercising a solver's own scaling behavior on a single maze.
-const (
-	BenchWidth       = 21
-	BenchHeight      = 15
-	BenchTeleporters = 3
-)
+// Measured real export sizes for the full 10-style-maze sweep at each of
+// these: 21x15 ~15MB, 10x10 ~4.6MB, 25x25 ~30MB, 50x50 ~115MB, 100x100
+// ~433MB (one combined file is the sum of all of these, so budget for a
+// file in the 600MB range). That's real weight to ship and parse
+// client-side - measured to still work (100x100 alone parses in a few
+// seconds using several hundred MB of browser heap) but it's genuinely
+// heavy, which is the tradeoff of a full 10-maze sweep at every size in a
+// single file rather than fewer mazes at the larger sizes or separate
+// per-size files fetched on demand.
+var benchmarkSizeTiers = []sizeTier{
+	{width: 21, height: 15},
+	{width: 10, height: 10},
+	{width: 25, height: 25},
+	{width: 50, height: 50},
+	{width: 100, height: 100},
+}

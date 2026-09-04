@@ -71,8 +71,16 @@ func (BrenThreadOptimizedSolver) Solve(m *Maze) Solution {
 	}
 	maxDist := m.Width + m.Height
 
-	leg1Path, leg1Edges, leg1Visited, leg1Span := runBrenThreadLeg(neighbors, cellOf, n, maxDist, idx(m.Start), idx(m.Key))
-	leg2Path, leg2Edges, leg2Visited, leg2Span := runBrenThreadLeg(neighbors, cellOf, n, maxDist, idx(m.Key), idx(m.Exit))
+	leg1Path, leg1Edges, leg1Visited, leg1Span, leg1PrimOps := runBrenThreadLeg(neighbors, cellOf, n, maxDist, idx(m.Start), idx(m.Key))
+	leg2Path, leg2Edges, leg2Visited, leg2Span, leg2PrimOps := runBrenThreadLeg(neighbors, cellOf, n, maxDist, idx(m.Key), idx(m.Exit))
+
+	// leg2 runs after leg1 finishes (see Span's own doc comment below), so
+	// its Depth numbering - which starts back at 1 relative to Key - is
+	// offset by leg1Span here to keep every edge's Depth meaningful as one
+	// continuous timeline across the whole combined search.
+	for i := range leg2Edges {
+		leg2Edges[i].Depth += leg1Span
+	}
 
 	visited := append(leg1Visited, leg2Visited...)
 	edges := append(leg1Edges, leg2Edges...)
@@ -88,7 +96,8 @@ func (BrenThreadOptimizedSolver) Solve(m *Maze) Solution {
 		// finds Key, its own source - so their spans add rather than
 		// overlap, the same way Steps already adds both legs' path
 		// lengths.
-		Span: leg1Span + leg2Span,
+		Span:    leg1Span + leg2Span,
+		PrimOps: leg1PrimOps + leg2PrimOps,
 	}
 }
 
@@ -183,7 +192,7 @@ func buildFlatNeighbors(m *Maze, idx func(Cell) int32) [][]flatEdge {
 //     pop are both O(1) array writes with zero heap allocation - no
 //     append, so no repeated backing-array growth every time a bucket
 //     gains a new cell.
-func runBrenThreadLeg(neighbors [][]flatEdge, cellOf []Cell, n, maxDist int, src, dst int32) (path []Cell, edges []Edge, visited []Cell, span int) {
+func runBrenThreadLeg(neighbors [][]flatEdge, cellOf []Cell, n, maxDist int, src, dst int32) (path []Cell, edges []Edge, visited []Cell, span int, primOps int64) {
 	dstCell := cellOf[dst]
 
 	parent := make([]int32, n) // -1 = unclaimed; else the flat index that claimed it (src claims itself)
@@ -234,17 +243,34 @@ func runBrenThreadLeg(neighbors [][]flatEdge, cellOf []Cell, n, maxDist int, src
 		numWorkers = 1
 	}
 
+	// totalPrimOps (see Solution.PrimOps) is written exactly once per
+	// worker, atomically, right as it exits - see the two defers below.
+	// Each worker accumulates into its own goroutine-local localPrimOps
+	// throughout (no synchronization needed for that, it's never shared),
+	// so the only atomic traffic this adds is one add per worker, not one
+	// per increment.
+	var totalPrimOps int64
+
 	var workers sync.WaitGroup
 	for w := 0; w < numWorkers; w++ {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
+			var localPrimOps int64
+			// Registered after workers.Done() above, so - deferred calls
+			// run LIFO - this merge always completes before Done() fires,
+			// which is what guarantees every worker's contribution has
+			// already landed in totalPrimOps by the time workers.Wait()
+			// (after the loop below) returns.
+			defer func() { atomic.AddInt64(&totalPrimOps, localPrimOps) }()
 			for {
 				mu.Lock()
 				var posIdx int32
 				for {
+					localPrimOps += 3 // mutex round trip to search the bucket queue - see Solution.PrimOps
 					foundBucket := -1
 					for d := 0; d < len(bucketHead); d++ {
+						localPrimOps++ // every bucket examined during the linear scan is a real primitive op
 						if bucketHead[d] != -1 {
 							foundBucket = d
 							break
@@ -263,7 +289,9 @@ func runBrenThreadLeg(neighbors [][]flatEdge, cellOf []Cell, n, maxDist int, src
 				}
 				mu.Unlock()
 
+				localPrimOps++ // atomic load of `found`
 				if atomic.LoadInt32(&found) == 1 {
+					localPrimOps += 3 // mutex round trip to record this worker standing down
 					mu.Lock()
 					pending--
 					cond.Broadcast()
@@ -277,28 +305,31 @@ func runBrenThreadLeg(neighbors [][]flatEdge, cellOf []Cell, n, maxDist int, src
 				var newItems, newDist [4]int32
 				newCount := 0
 				for _, e := range neighbors[posIdx] {
+					localPrimOps += 2 // the candidate-move check itself, plus the atomic CAS it requires
 					if !atomic.CompareAndSwapInt32(&parent[e.to], -1, posIdx) {
 						continue // already claimed by another worker
 					}
 					if e.to == dst {
 						atomic.StoreInt32(&found, 1)
+						localPrimOps++
 					}
 					newItems[newCount] = e.to
 					newDist[newCount] = int32(manhattan(cellOf[e.to], dstCell))
 					newCount++
 				}
 
+				localPrimOps += 3 // mutex round trip to commit this batch to the bucket queue
 				mu.Lock()
 				for i := 0; i < newCount; i++ {
 					d, c := newDist[i], newItems[i]
 					next[c] = bucketHead[d]
 					bucketHead[d] = c
 					visited = append(visited, cellOf[c])
-					edges = append(edges, Edge{From: cellOf[posIdx], To: cellOf[c]})
 					depth[c] = depth[posIdx] + 1
 					if depth[c] > maxDepth {
 						maxDepth = depth[c]
 					}
+					edges = append(edges, Edge{From: cellOf[posIdx], To: cellOf[c], Depth: int(depth[c])})
 				}
 				pending += newCount - 1 // the new claims, minus this item finishing
 				cond.Broadcast()
@@ -307,12 +338,13 @@ func runBrenThreadLeg(neighbors [][]flatEdge, cellOf []Cell, n, maxDist int, src
 		}()
 	}
 	workers.Wait()
+	primOps = totalPrimOps
 
 	if parent[dst] == -1 {
-		return nil, edges, visited, int(maxDepth) // unreachable; shouldn't happen for a generator-verified maze
+		return nil, edges, visited, int(maxDepth), primOps // unreachable; shouldn't happen for a generator-verified maze
 	}
 	path = reconstructFlatPath(parent, src, dst, func(i int32) Cell { return cellOf[i] })
-	return path, edges, visited, int(maxDepth)
+	return path, edges, visited, int(maxDepth), primOps
 }
 
 // bfsOverGraphFlat walks a precomputed flat int32 adjacency graph with an
@@ -321,7 +353,7 @@ func runBrenThreadLeg(neighbors [][]flatEdge, cellOf []Cell, n, maxDist int, src
 // longer uses this itself (see runBrenThreadLeg's parent-pointer
 // reconstruction above) but the function stays here since both solvers
 // share this file's flat-graph helpers.
-func bfsOverGraphFlat(graph [][]int32, cellAt func(int32) Cell, src, dst int32) (path []Cell, edges []Edge) {
+func bfsOverGraphFlat(graph [][]int32, cellAt func(int32) Cell, src, dst int32) (path []Cell, edges []Edge, primOps int64) {
 	n := len(graph)
 	visitedFlag := make([]bool, n)
 	parent := make([]int32, n)
@@ -335,9 +367,10 @@ func bfsOverGraphFlat(graph [][]int32, cellAt func(int32) Cell, src, dst int32) 
 	for head := 0; head < len(queue); head++ {
 		cur := queue[head]
 		if cur == dst {
-			return reconstructFlatPath(parent, src, dst, cellAt), edges
+			return reconstructFlatPath(parent, src, dst, cellAt), edges, primOps
 		}
 		for _, next := range graph[cur] {
+			primOps++ // every neighbor examined is a real primitive op - see Solution.PrimOps
 			if !visitedFlag[next] {
 				visitedFlag[next] = true
 				parent[next] = cur
@@ -346,7 +379,7 @@ func bfsOverGraphFlat(graph [][]int32, cellAt func(int32) Cell, src, dst int32) 
 			}
 		}
 	}
-	return nil, edges // unreachable; shouldn't happen for a generator-verified maze
+	return nil, edges, primOps // unreachable; shouldn't happen for a generator-verified maze
 }
 
 func reconstructFlatPath(parent []int32, src, dst int32, cellAt func(int32) Cell) []Cell {

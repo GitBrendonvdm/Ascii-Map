@@ -27,10 +27,42 @@ import (
 // at once for a solver that reports real values, instead of always one
 // edge at a time in array order.
 //
-// v5: deterministic score uses total ops rather than Span. Span remains
-// exported for diagnostics and animation, but a theoretical parallel depth
-// does not account for worker startup or synchronization overhead.
-const exportFormatVersion = 5
+// v5: primOpsCount/primOpsRatio join the score (steps/span/primOps/allocs/
+// mem, a 5-way geometric mean now) - a deterministic proxy for raw CPU
+// cost (looping, branching, synchronization) that steps/span/allocs/mem
+// all leave uncharged - see Solution.PrimOps in solver.go and scoredResult
+// in scoring.go for why.
+//
+// v6: top-level Mazes replaced by Sizes, a list of jsonSizeGroup (width/
+// height + that size's own mazes + that size's own leaderboard) - one
+// export file now holds every benchmark size tier (see benchmarkSizeTiers
+// in seeds.go) instead of one file per size. The top-level Leaderboard
+// field is repurposed to mean the OVERALL leaderboard (every maze run
+// across every size tier, not just one) - see runBenchmark's own doc
+// comment for why mixing sizes into one leaderboard is still meaningful
+// (score is already a ratio, not an absolute).
+//
+// v7: the file is no longer one big indented JSON document - it's
+// newline-delimited (NDJSON): a small header line (jsonExportHeader -
+// formatVersion/generatedAt/directionBits/sizeIndex/the overall
+// leaderboard) followed by one compact JSON line per size group
+// (jsonSizeGroup, in the same order as the header's sizeIndex). This is
+// what lets viewer.html stream-read and parse ONLY the one size tier a
+// viewer actually asks for, instead of the whole file - a full
+// benchmarkSizeTiers sweep measures at 700MB+ as one document, well past
+// what a browser can reliably buffer and parse in one shot (confirmed:
+// fetch() silently returns an empty body for a response that size in
+// testing, even though the same bytes transfer fine via curl), while the
+// single largest tier alone (100x100, ~430MB) has been measured to parse
+// fine on its own. Reading line-by-line and discarding every line that
+// isn't the requested one bounds the viewer's memory use to roughly one
+// tier's worth, however many tiers the file actually has - see
+// streamNDJSONLine in viewer.html.
+//
+// v8: deterministic score uses total ops rather than Span. Span remains
+// exported for diagnostics and animation; PrimOps continues to account for
+// deterministic low-level work such as synchronization.
+const exportFormatVersion = 8
 
 type jsonCell struct {
 	X int `json:"x"`
@@ -63,15 +95,17 @@ type jsonResult struct {
 	Path          []jsonCell `json:"path"`
 	Visited       []jsonCell `json:"visited"`
 	Edges         []jsonEdge `json:"edges"`
-	OpsCount      int        `json:"opsCount"`    // len(Edges); total work done, deterministic score input
-	SpanCount     int        `json:"spanCount"`   // critical-path length; informational only
-	AllocsCount   int64      `json:"allocsCount"` // heap allocation count; deterministic score input
-	MemBytes      int64      `json:"memBytes"`    // bytes allocated; deterministic score input
-	ElapsedNs     int64      `json:"elapsedNs"`   // informational only - see scoring.go
-	CPUNs         int64      `json:"cpuNs"`       // informational only - see scoring.go
+	OpsCount      int        `json:"opsCount"`     // len(Edges); total work done, deterministic score input
+	SpanCount     int        `json:"spanCount"`    // critical-path length; animation/diagnostic only
+	PrimOpsCount  int64      `json:"primOpsCount"` // deterministic CPU-cost proxy; deterministic score input - see Solution.PrimOps
+	AllocsCount   int64      `json:"allocsCount"`  // heap allocation count; deterministic score input
+	MemBytes      int64      `json:"memBytes"`     // bytes allocated; deterministic score input
+	ElapsedNs     int64      `json:"elapsedNs"`    // informational only - see scoring.go
+	CPUNs         int64      `json:"cpuNs"`        // informational only - see scoring.go
 	Score         float64    `json:"score,omitempty"`
 	StepsRatio    float64    `json:"stepsRatio,omitempty"`
 	OpsRatio      float64    `json:"opsRatio,omitempty"`
+	PrimOpsRatio  float64    `json:"primOpsRatio,omitempty"`
 	AllocsRatio   float64    `json:"allocsRatio,omitempty"`
 	MemRatio      float64    `json:"memRatio,omitempty"`
 }
@@ -97,8 +131,9 @@ type jsonAggregate struct {
 	Algorithm    string  `json:"algorithm"`
 	AvgScore     float64 `json:"avgScore"`
 	AvgSteps     float64 `json:"avgSteps"`
-	AvgOps       float64 `json:"avgOps"`  // total work; deterministic score input
-	AvgSpan      float64 `json:"avgSpan"` // informational only
+	AvgOps       float64 `json:"avgOps"`     // total work; deterministic score input
+	AvgSpan      float64 `json:"avgSpan"`    // animation/diagnostic only
+	AvgPrimOps   float64 `json:"avgPrimOps"` // deterministic CPU-cost proxy - see Solution.PrimOps
 	AvgAllocs    float64 `json:"avgAllocs"`
 	AvgMemBytes  float64 `json:"avgMemBytes"`
 	AvgElapsedNs int64   `json:"avgElapsedNs"` // informational only - see scoring.go
@@ -107,12 +142,37 @@ type jsonAggregate struct {
 	Runs         int     `json:"runs"`
 }
 
-type jsonExport struct {
-	FormatVersion int             `json:"formatVersion"`
-	GeneratedAt   string          `json:"generatedAt"`
-	DirectionBits jsonDirection   `json:"directionBits"`
-	Mazes         []jsonMaze      `json:"mazes"`
-	Leaderboard   []jsonAggregate `json:"leaderboard,omitempty"`
+// jsonSizeGroup is every maze/leaderboard entry for one benchmark size
+// tier (see benchmarkSizeTiers in seeds.go) - width/height match every
+// maze inside it exactly, since a tier's own mazes are all generated at
+// that one size.
+type jsonSizeGroup struct {
+	Width       int             `json:"width"`
+	Height      int             `json:"height"`
+	Mazes       []jsonMaze      `json:"mazes"`
+	Leaderboard []jsonAggregate `json:"leaderboard,omitempty"`
+}
+
+// jsonSizeIndexEntry is a size tier's dimensions only - no mazes, no
+// leaderboard - so the header line can tell a viewer every tier that
+// exists (to populate a size picker) without it having to stream past any
+// of the actual (large) group lines first.
+type jsonSizeIndexEntry struct {
+	Width  int `json:"width"`
+	Height int `json:"height"`
+}
+
+// jsonExportHeader is line 1 of the NDJSON export file (see
+// exportFormatVersion's v7 note) - deliberately small (no maze data) so a
+// viewer can safely read and parse it whole every time, the same way the
+// old single-document format worked, before deciding which (much larger)
+// group line to stream in next.
+type jsonExportHeader struct {
+	FormatVersion int                  `json:"formatVersion"`
+	GeneratedAt   string               `json:"generatedAt"`
+	DirectionBits jsonDirection        `json:"directionBits"`
+	SizeIndex     []jsonSizeIndexEntry `json:"sizeIndex"`
+	Leaderboard   []jsonAggregate      `json:"leaderboard,omitempty"` // overall - every maze run across every size tier, see exportFormatVersion's v6 note
 }
 
 type jsonDirection struct {
@@ -175,6 +235,7 @@ func buildJSONMaze(seed int64, style string, m *Maze, results []runResult, score
 			Steps:         r.steps,
 			OpsCount:      r.ops,
 			SpanCount:     r.span,
+			PrimOpsCount:  r.primOps,
 			AllocsCount:   r.allocs,
 			MemBytes:      r.memBytes,
 			ElapsedNs:     r.elapsed.Nanoseconds(),
@@ -184,6 +245,7 @@ func buildJSONMaze(seed int64, style string, m *Maze, results []runResult, score
 			jr.Score = s.score
 			jr.StepsRatio = s.stepsRatio
 			jr.OpsRatio = s.opsRatio
+			jr.PrimOpsRatio = s.primOpsRatio
 			jr.AllocsRatio = s.allocsRatio
 			jr.MemRatio = s.memRatio
 		}
@@ -239,26 +301,52 @@ func buildJSONAggregate(agg []aggregate) []jsonAggregate {
 			AvgSteps:     a.avgSteps,
 			AvgOps:       a.avgOps,
 			AvgSpan:      a.avgSpan,
+			AvgPrimOps:   a.avgPrimOps,
 			AvgAllocs:    a.avgAllocs,
 			AvgMemBytes:  a.avgMem,
 			AvgElapsedNs: a.avgTime.Nanoseconds(),
 			AvgCPUNs:     a.avgCPU.Nanoseconds(),
 			Wins:         a.wins,
-			Runs:         len(BenchmarkSeeds),
+			Runs:         a.runs,
 		}
 	}
 	return out
 }
 
-func writeExportJSON(path string, data jsonExport) error {
-	data.FormatVersion = exportFormatVersion
-	data.GeneratedAt = time.Now().Format(time.RFC3339)
+// writeBenchExportNDJSON writes the newline-delimited export format (see
+// exportFormatVersion's v7 note): a small header line, then one compact
+// JSON line per group in groups, in that same order. json.Encoder.Encode
+// already writes its value compact (no indentation, since SetIndent is
+// never called here) followed by exactly one trailing '\n' per call - that
+// per-call newline is the whole of the line-framing this format needs, so
+// nothing here manually concatenates a "\n" onto anything.
+func writeBenchExportNDJSON(path string, directionBits jsonDirection, groups []jsonSizeGroup, overallLeaderboard []jsonAggregate) error {
 	f, err := os.Create(path)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
+
+	sizeIndex := make([]jsonSizeIndexEntry, len(groups))
+	for i, g := range groups {
+		sizeIndex[i] = jsonSizeIndexEntry{Width: g.Width, Height: g.Height}
+	}
+	header := jsonExportHeader{
+		FormatVersion: exportFormatVersion,
+		GeneratedAt:   time.Now().Format(time.RFC3339),
+		DirectionBits: directionBits,
+		SizeIndex:     sizeIndex,
+		Leaderboard:   overallLeaderboard,
+	}
+
 	enc := json.NewEncoder(f)
-	enc.SetIndent("", "  ")
-	return enc.Encode(data)
+	if err := enc.Encode(header); err != nil {
+		return err
+	}
+	for _, g := range groups {
+		if err := enc.Encode(g); err != nil {
+			return err
+		}
+	}
+	return nil
 }
