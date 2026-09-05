@@ -171,95 +171,47 @@ func braidConfined(m *Maze, prob float64, minX, maxX int) {
 	}
 }
 
-// openRandomWallConfined is Maze.openRandomWall (maze.go), scoped to
-// columns [minX,maxX] for the same reason as braidConfined.
-func openRandomWallConfined(m *Maze, minX, maxX int) bool {
+// openCutWallConfined is Maze.openCutWall (flow.go), scoped to columns
+// [minX,maxX] for the same reason as braidConfined: it opens a wall
+// crossing the current min-cut between a and b, but only ever considers
+// walls that stay within the half a and b already both live in.
+func openCutWallConfined(m *Maze, reachableFromSrc []bool, minX, maxX int) bool {
 	type edge struct {
 		c   Cell
 		dir int
 	}
-	var closed []edge
+	var candidates []edge
 	for y := 0; y < m.Height; y++ {
 		for x := minX; x <= maxX; x++ {
 			c := Cell{x, y}
-			if x+1 <= maxX && !m.isOpen(c, East) {
-				closed = append(closed, edge{c, East})
-			}
-			if y+1 < m.Height && !m.isOpen(c, South) {
-				closed = append(closed, edge{c, South})
-			}
-		}
-	}
-	if len(closed) == 0 {
-		return false
-	}
-	e := closed[m.rng.Intn(len(closed))]
-	m.carve(e.c, e.dir)
-	return true
-}
-
-// openWallNearPathConfined is Maze.openWallNearPath (maze.go), scoped to
-// columns [minX,maxX] for the same reason as braidConfined: it opens a
-// wall touching the current shortest route between a and b, but only ever
-// considers walls that stay within the half a and b already both live in.
-func openWallNearPathConfined(m *Maze, a, b Cell, minX, maxX int) bool {
-	dist := m.bfsDistances(a)
-	if dist[b.Y][b.X] == -1 {
-		return false
-	}
-
-	type edge struct {
-		c   Cell
-		dir int
-	}
-	var closed []edge
-	seen := map[Cell]bool{}
-	for cur := b; ; {
-		if !seen[cur] {
-			seen[cur] = true
-			for _, dir := range allDirections {
-				n := m.neighbor(cur, dir)
-				if !m.inBounds(n) || n.X < minX || n.X > maxX {
-					continue
-				}
-				if !m.isOpen(cur, dir) {
-					closed = append(closed, edge{cur, dir})
-				}
-			}
-		}
-		if cur == a {
-			break
-		}
-		next := cur
-		for _, dir := range allDirections {
-			if !m.isOpen(cur, dir) {
+			ci := m.idx(c)
+			if !reachableFromSrc[ci] {
 				continue
 			}
-			n := m.neighbor(cur, dir)
-			if m.inBounds(n) && dist[n.Y][n.X] == dist[cur.Y][cur.X]-1 {
-				next = n
-				break
+			for _, dir := range allDirections {
+				n := m.neighbor(c, dir)
+				if !m.inBounds(n) || n.X < minX || n.X > maxX || m.isOpen(c, dir) {
+					continue
+				}
+				if !reachableFromSrc[m.idx(n)] {
+					candidates = append(candidates, edge{c, dir})
+				}
 			}
 		}
-		if next == cur {
-			break
-		}
-		cur = next
 	}
-
-	if len(closed) == 0 {
+	if len(candidates) == 0 {
 		return false
 	}
-	e := closed[m.rng.Intn(len(closed))]
+	e := candidates[m.rng.Intn(len(candidates))]
 	m.carve(e.c, e.dir)
 	return true
 }
 
-// ensureRedundantRoutesConfined is Maze.EnsureRedundantRoutes (maze.go),
-// scoped to columns [minX,maxX]: it opens walls (preferring ones near a
-// and b's current shortest path, same as the unconfined version) until
-// there are at least minPaths edge-disjoint routes between a and b,
-// without ever touching a wall outside that half.
+// ensureRedundantRoutesConfined is Maze.raiseEdgeDisjointPaths (flow.go),
+// scoped to columns [minX,maxX]: it opens walls - each one the current
+// min-cut between a and b, same guaranteed-progress reasoning as the
+// unconfined version - until there are at least minPaths edge-disjoint
+// routes between a and b, without ever touching a wall outside that half.
 func ensureRedundantRoutesConfined(m *Maze, a, b Cell, minPaths, minX, maxX int) {
 	target := minPaths
 	if d := m.gridDegree(a); d < target {
@@ -269,13 +221,13 @@ func ensureRedundantRoutesConfined(m *Maze, a, b Cell, minPaths, minX, maxX int)
 		target = d
 	}
 
-	const maxAttempts = 2000
-	for attempt := 0; attempt < maxAttempts; attempt++ {
-		if m.edgeDisjointPaths(a, b, target) >= target {
+	for {
+		flow, reachableFromSrc := m.edgeDisjointPaths(a, b, target)
+		if flow >= target {
 			return
 		}
-		if !openWallNearPathConfined(m, a, b, minX, maxX) && !openRandomWallConfined(m, minX, maxX) {
-			return
+		if !openCutWallConfined(m, reachableFromSrc, minX, maxX) {
+			return // no wall within this half crosses the cut
 		}
 	}
 }

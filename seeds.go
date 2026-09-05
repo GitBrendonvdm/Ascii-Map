@@ -38,7 +38,9 @@ type sizeTier struct {
 //
 // The large tiers deliberately remain in this shared export so the viewer's
 // size selector can compare the same two V3 solvers at every named size.
-// The 5,000×5,000 tier is correspondingly resource-intensive.
+// 5000x5000 was tried and dropped - even with the min-cut fix to
+// EnsureRedundantRoutes (see flow.go), 25M cells x 10 mazes was too
+// resource-intensive to be worth keeping in the regular sweep.
 var benchmarkSizeTiers = []sizeTier{
 	{width: 21, height: 15},
 	{width: 10, height: 10},
@@ -48,5 +50,4 @@ var benchmarkSizeTiers = []sizeTier{
 	{width: 250, height: 250},
 	{width: 400, height: 400},
 	{width: 1000, height: 1000},
-	{width: 5000, height: 5000},
 }

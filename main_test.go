@@ -23,7 +23,6 @@ func TestBenchmarkIncludesEveryNamedLargeSize(t *testing.T) {
 		{250, 250}:   false,
 		{400, 400}:   false,
 		{1000, 1000}: false,
-		{5000, 5000}: false,
 	}
 	for _, tier := range benchmarkSizeTiers {
 		key := [2]int{tier.width, tier.height}

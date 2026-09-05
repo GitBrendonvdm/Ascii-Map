@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -486,6 +487,7 @@ func runBenchmark(summaryOnly bool, consoleWidthOverride int, consoleRoutes bool
 	}
 
 	fmt.Fprintf(os.Stderr, "generating %d mazes (%d size tiers x %d seeds) across up to %d goroutines...\n", len(jobs), len(benchmarkSizeTiers), len(BenchmarkSeeds), runtime.NumCPU())
+	var generated atomic.Int32
 	parallelFor(len(jobs), func(i int) {
 		j := jobs[i]
 		style, ok := mazeStyleByName(j.styleName)
@@ -495,20 +497,25 @@ func runBenchmark(summaryOnly bool, consoleWidthOverride int, consoleRoutes bool
 		}
 		tier := benchmarkSizeTiers[j.tierIdx]
 		j.maze = style.Generate(tier.width, tier.height, j.seed, BenchTeleporters)
+		n := generated.Add(1)
+		fmt.Fprintf(os.Stderr, "  [%d/%d] generated %dx%d %s (seed=%d)\n", n, len(jobs), tier.width, tier.height, j.styleName, j.seed)
 	})
 	fmt.Fprintln(os.Stderr, "done.")
 
 	fmt.Fprintf(os.Stderr, "measuring %d deterministic solver runs (sequential - see runBenchmark's own doc comment)...\n", len(jobs)*len(solvers))
-	for _, j := range jobs {
+	for ji, j := range jobs {
+		tier := benchmarkSizeTiers[j.tierIdx]
 		j.results = make([]runResult, len(solvers))
 		for si, solver := range solvers {
 			j.results[si] = measureDeterministic(solver, j.maze)
 		}
+		fmt.Fprintf(os.Stderr, "  [%d/%d] measured %dx%d %s (seed=%d)\n", ji+1, len(jobs), tier.width, tier.height, j.styleName, j.seed)
 	}
 	fmt.Fprintln(os.Stderr, "done.")
 
 	fmt.Fprintf(os.Stderr, "timing solvers and building export data across up to %d goroutines...\n", runtime.NumCPU())
 	jsonMazes := make([]jsonMaze, len(jobs))
+	var timed atomic.Int32
 	parallelFor(len(jobs), func(i int) {
 		j := jobs[i]
 		for si, solver := range solvers {
@@ -516,6 +523,9 @@ func runBenchmark(summaryOnly bool, consoleWidthOverride int, consoleRoutes bool
 		}
 		scored := scoreResults(j.results)
 		jsonMazes[i] = buildJSONMazeWithSolutions(j.seed, j.styleName, j.maze, j.results, scored)
+		tier := benchmarkSizeTiers[j.tierIdx]
+		n := timed.Add(1)
+		fmt.Fprintf(os.Stderr, "  [%d/%d] timed+exported %dx%d %s (seed=%d)\n", n, len(jobs), tier.width, tier.height, j.styleName, j.seed)
 	})
 	fmt.Fprintln(os.Stderr, "done.")
 	fmt.Fprintln(os.Stderr)

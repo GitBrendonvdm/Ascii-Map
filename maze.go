@@ -149,88 +149,40 @@ func (m *Maze) Braid(prob float64) {
 	}
 }
 
-// openRandomWall knocks down one random closed internal wall. Used to keep
-// nudging connectivity upward if braiding wasn't enough on its own.
-func (m *Maze) openRandomWall() bool {
+// openCutWall opens a uniformly random currently-closed wall connecting a
+// reachableFromSrc cell to a non-reachableFromSrc one - see
+// raiseEdgeDisjointPaths (flow.go) for why every such wall is guaranteed
+// to raise the edge-disjoint path count it's called about. Returns false
+// if no such wall exists (shouldn't happen for a spanning-tree-derived
+// maze, but stay correct if it ever does).
+func (m *Maze) openCutWall(reachableFromSrc []bool) bool {
 	type edge struct {
 		c   Cell
 		dir int
 	}
-	var closed []edge
+	var candidates []edge
 	for y := 0; y < m.Height; y++ {
 		for x := 0; x < m.Width; x++ {
 			c := Cell{x, y}
-			for _, dir := range []int{East, South} {
-				n := m.neighbor(c, dir)
-				if m.inBounds(n) && !m.isOpen(c, dir) {
-					closed = append(closed, edge{c, dir})
-				}
-			}
-		}
-	}
-	if len(closed) == 0 {
-		return false
-	}
-	e := closed[m.rng.Intn(len(closed))]
-	m.carve(e.c, e.dir)
-	return true
-}
-
-// openWallNearPath opens one random closed wall touching a cell on the
-// current shortest route between a and b (ordinary walls only, ignoring
-// teleporters - same as bfsDistances), so the new opening creates a local
-// detour right where an alternate route is actually needed instead of
-// carving unrelated texture wherever a whole-grid random pick happens to
-// land. Returns false if a and b aren't currently connected at all, or if
-// every wall touching the path is already open.
-func (m *Maze) openWallNearPath(a, b Cell) bool {
-	dist := m.bfsDistances(a)
-	if dist[b.Y][b.X] == -1 {
-		return false
-	}
-
-	type edge struct {
-		c   Cell
-		dir int
-	}
-	var closed []edge
-	seen := map[Cell]bool{}
-	for cur := b; ; {
-		if !seen[cur] {
-			seen[cur] = true
-			for _, dir := range allDirections {
-				n := m.neighbor(cur, dir)
-				if m.inBounds(n) && !m.isOpen(cur, dir) {
-					closed = append(closed, edge{cur, dir})
-				}
-			}
-		}
-		if cur == a {
-			break
-		}
-		// Step to whichever open neighbor is exactly one closer to a -
-		// walking the path itself downhill, cell by cell.
-		next := cur
-		for _, dir := range allDirections {
-			if !m.isOpen(cur, dir) {
+			ci := m.idx(c)
+			if !reachableFromSrc[ci] {
 				continue
 			}
-			n := m.neighbor(cur, dir)
-			if m.inBounds(n) && dist[n.Y][n.X] == dist[cur.Y][cur.X]-1 {
-				next = n
-				break
+			for _, dir := range allDirections {
+				n := m.neighbor(c, dir)
+				if !m.inBounds(n) || m.isOpen(c, dir) {
+					continue
+				}
+				if !reachableFromSrc[m.idx(n)] {
+					candidates = append(candidates, edge{c, dir})
+				}
 			}
 		}
-		if next == cur {
-			break // shouldn't happen given dist[b] != -1, but don't loop forever
-		}
-		cur = next
 	}
-
-	if len(closed) == 0 {
+	if len(candidates) == 0 {
 		return false
 	}
-	e := closed[m.rng.Intn(len(closed))]
+	e := candidates[m.rng.Intn(len(candidates))]
 	m.carve(e.c, e.dir)
 	return true
 }
@@ -259,16 +211,13 @@ func (m *Maze) gridDegree(c Cell) int {
 // clamp is returned so the caller can report honestly instead of pretending
 // an impossible target was met.
 //
-// Each attempt opens a wall next to the pair's *current* shortest path
-// rather than picking anywhere in the whole grid uniformly at random. A
-// second edge-disjoint route only ever needs one small local detour around
-// the existing path - a wall picked from the entire maze has only a tiny
-// chance of being anywhere near where it would actually help, so a purely
-// random search can end up opening a large fraction of the maze's walls
-// before it stumbles onto one that does (measured: 243 of 594 possible
-// walls on one real seed, leaving the maze barely recognizable as one).
-// Biasing toward the path itself converges in a handful of opens instead,
-// and leaves the rest of the maze's texture untouched.
+// The actual wall-opening happens in raiseEdgeDisjointPaths (flow.go): each
+// wall it opens is the current max-flow computation's own min-cut edge,
+// mathematically guaranteed (max-flow/min-cut duality) to raise the
+// achieved count by exactly one, so reaching target here costs exactly
+// target-achieved wall opens, at any maze size - not the hundreds of
+// random guesses an earlier version of this needed (see
+// raiseEdgeDisjointPaths' own doc comment for the measured numbers).
 func (m *Maze) EnsureRedundantRoutes(start, key, exit Cell, minPaths int) (achievedStartKey, achievedKeyExit, targetStartKey, targetKeyExit int) {
 	targetStartKey = minPaths
 	if d := m.gridDegree(start); d < targetStartKey {
@@ -285,31 +234,8 @@ func (m *Maze) EnsureRedundantRoutes(start, key, exit Cell, minPaths int) (achie
 		targetKeyExit = d
 	}
 
-	const maxAttempts = 5000
-	for attempt := 0; attempt < maxAttempts; attempt++ {
-		achievedStartKey = m.edgeDisjointPaths(start, key, targetStartKey)
-		achievedKeyExit = m.edgeDisjointPaths(key, exit, targetKeyExit)
-		if achievedStartKey >= targetStartKey && achievedKeyExit >= targetKeyExit {
-			return
-		}
-
-		var a, b Cell
-		if achievedStartKey < targetStartKey {
-			a, b = start, key
-		} else {
-			a, b = key, exit
-		}
-		if m.openWallNearPath(a, b) {
-			continue
-		}
-		// No path currently connects a and b at all (shouldn't happen for
-		// a spanning-tree-derived maze, but stay correct if it ever does)
-		// or every wall along it is already open - fall back to a
-		// whole-grid random pick rather than getting stuck.
-		if !m.openRandomWall() {
-			return // fully open grid; nothing more we can do
-		}
-	}
+	achievedStartKey = m.raiseEdgeDisjointPaths(start, key, targetStartKey)
+	achievedKeyExit = m.raiseEdgeDisjointPaths(key, exit, targetKeyExit)
 	return
 }
 
